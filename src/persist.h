@@ -75,7 +75,8 @@ class Persist {
     void saveLastServoAngle(int angle);
 
     // Diagnostics: log every drawing move ("Starting the move to x, y"). Off by
-    // default - at 9600 baud each line blocks the main loop for ~35 ms.
+    // default - each line blocks the main loop briefly (~3 ms at 115200 baud)
+    // and pushes older entries out of the log buffer.
     bool getLogDrawingMoves() { return logDrawingMoves; }
     void setLogDrawingMoves(bool enabled);
 

@@ -41,7 +41,7 @@ std::vector<const char *> menu = {"wifi", "sep"};
 void setup()
 {
     delay(10);
-    Serial.begin(9600);
+    Serial.begin(115200); // was 9600: logging blocks the loop ~1 ms per character at that speed
     Log.printf("\nMural firmware %s (built %s %s)\n", MURAL_FW_VERSION, __DATE__, __TIME__);
 
     // First thing: record why we (re)booted - brownouts show up here.
