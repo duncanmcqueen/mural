@@ -123,6 +123,28 @@ public:
 
     Point getHomeCoordinates();
     void disableMotors();
+
+    // Position persistence / restore (see persist.h)
+    bool isHomed() { return homed; }
+    long getLeftSteps() { return leftMotor->currentPosition(); }
+    long getRightSteps() { return rightMotor->currentPosition(); }
+    double getRawX() { return X; }
+    double getRawY() { return Y; }
+    // Marks the position as unknown, e.g. after jogging the belts by hand.
+    void invalidatePosition();
+    // True once after invalidatePosition() - lets the saver clear the stored copy.
+    bool consumePositionInvalidated();
+    // Stop trusting the in-memory position, but leave the saved copy alone (wizard reset).
+    void forgetPosition() { homed = false; }
+    // Allow ExtendToHome to run again after a re-home is requested.
+    void resetHoming() { startedHoming = false; }
+    // Trust a previously saved position instead of re-homing.
+    void restorePosition(int topDistance, long leftSteps, long rightSteps, double x, double y);
+    // Pen-up travel back to the home position (used to sanity-check a restored position).
+    float moveToHome();
+
+private:
+    volatile bool positionInvalidated = false;
 };
 
 #endif

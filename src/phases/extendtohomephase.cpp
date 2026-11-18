@@ -15,6 +15,6 @@ const char* ExtendToHomePhase::getName() {
 
 void ExtendToHomePhase::loopPhase() {
     if (movement->hasStartedHoming() && !movement->isMoving()) {
-        manager->setPhase(PhaseManager::PenCalibration);
+        manager->advance();
     }
 }

@@ -5,10 +5,13 @@
 #include "pen.h"
 #include "display.h"
 #include "LittleFS.h"
+#include "persist.h"
+#include "logger.h"
 using namespace std;
 
 Runner::Runner(Movement *movement, Pen *pen, Display *display) {
     stopped = true;
+    progress = -1;
     this->movement = movement;
     this->pen = pen;
     this->display = display;
@@ -17,7 +20,7 @@ Runner::Runner(Movement *movement, Pen *pen, Display *display) {
 void Runner::initTaskProvider() {
     openedFile = LittleFS.open("/commands");
     if (!openedFile || !openedFile.available()) {
-        Serial.println("Failed to open file");
+        Log.println("Failed to open file");
         throw std::invalid_argument("No File");
     }
 
@@ -25,7 +28,7 @@ void Runner::initTaskProvider() {
     if (line.charAt(0) == 'd') {
         totalDistance = line.substring(1, line.length() - 1).toDouble();
     } else {
-        Serial.println("Bad file - no distance");
+        Log.println("Bad file - no distance");
         throw std::invalid_argument("bad file");
     }
 
@@ -34,11 +37,11 @@ void Runner::initTaskProvider() {
         auto height = heightLine.substring(1, heightLine.length() - 1).toDouble();
         // we actually dont need it, just validating
     } else {
-        Serial.println("Bad file - no height");
+        Log.println("Bad file - no height");
         throw std::invalid_argument("bad file");
     }
 
-    Serial.println("Total distance to travel: " + String(totalDistance));
+    Log.println("Total distance to travel: " + String(totalDistance));
 
     distanceSoFar = 0;
     progress = -1; // so 0% appears right away
@@ -64,12 +67,12 @@ Task *Runner::getNextTask()
         {
             if (line.charAt(1) == '1')
             {
-                //Serial.println("Pen down");
+                //Log.println("Pen down");
                 return new PenTask(false, pen);
             }
             else
             {
-                //Serial.println("Pen up");
+                //Log.println("Pen up");
                 return new PenTask(true, pen);
             }
         }
@@ -88,7 +91,10 @@ Task *Runner::getNextTask()
             sequenceIx = sequenceIx + 1;
             return finishingSequence[currentIx];
         } else {
-            // DistanceState::storeDistance(movement->getTopDistance());
+            // Drawing finished and we're back home: save where we are so the next
+            // session can resume without re-homing.
+            persist.savePosition(movement);
+            Log.println("Drawing finished, restarting");
             delay(200);
             ESP.restart();
             // unreachable
@@ -115,7 +121,7 @@ void Runner::run()
                 newProgress = 100;
             }
             if (progress != newProgress) {
-                Serial.println("Progress: " + String(newProgress));
+                Log.println("Progress: " + String(newProgress));
                 progress = newProgress;
                 display->displayText(String(progress) + "%");
             }
@@ -139,10 +145,10 @@ void Runner::dryRun() {
     auto task = getNextTask();
     auto index = 1;
     while (task != NULL) {
-        //Serial.println(String(index));
+        //Log.println(String(index));
         index = index + 1;
         delete task;
         task = getNextTask();
     }
-    Serial.println("All done");
+    Log.println("All done");
 }

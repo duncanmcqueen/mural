@@ -27,5 +27,7 @@ class Runner {
     void start();
     void run();
     void dryRun();
+    bool isRunning() { return !stopped; }
+    int getProgress() { return progress; }
 };
 #endif

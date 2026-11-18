@@ -1,3 +1,5 @@
+#include "logger.h"
+#include "persist.h"
 #include "movement.h"
 #include "interpolatingmovementtask.h"
 const char* InterpolatingMovementTask::NAME = "InterpolatingMovementTask";
@@ -24,7 +26,9 @@ InterpolatingMovementTask::InterpolatingMovementTask(Movement *movement, Movemen
 }
 
 void InterpolatingMovementTask::startRunning() {
-    Serial.printf("Starting the move to %.1f, %.1f\n", target.x, target.y);
+    if (persist.getLogDrawingMoves()) {
+        Log.printf("Starting the move to %.1f, %.1f\n", target.x, target.y);
+    }
     auto currentCoordinates = movement->getCoordinates();
     auto incrementPoint = getNextIncrement(currentCoordinates, target);
     movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, printSpeedSteps);

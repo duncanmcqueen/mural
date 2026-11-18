@@ -1,5 +1,7 @@
 #include "settopdistancephase.h"
 #include "commandhandlingphase.h"
+#include "persist.h"
+#include "logger.h"
 SetTopDistancePhase::SetTopDistancePhase(PhaseManager* manager, Movement* movement, Pen* pen) : CommandHandlingPhase(movement) {
     this->manager = manager;
     this->movement = movement;
@@ -9,21 +11,26 @@ SetTopDistancePhase::SetTopDistancePhase(PhaseManager* manager, Movement* moveme
 void SetTopDistancePhase::setTopDistance(AsyncWebServerRequest *request) {
     const AsyncWebParameter* p = request->getParam(0);
     int distance = p->value().toInt();
-    Serial.println("Setting distance");
-    movement->setTopDistance(distance); 
-    manager->setPhase(PhaseManager::SvgSelect);
+    if (distance <= 0) {
+        request->send(400, "text/plain", "Distance must be a positive number of millimetres");
+        return;
+    }
+    Log.printf("Setting distance to %d mm\n", distance);
+    movement->setTopDistance(distance);
+    persist.saveTopDistance(distance);
+    manager->advance();
     manager->respondWithState(request);
 }
 
 void SetTopDistancePhase::setServo(AsyncWebServerRequest *request) {
     const AsyncWebParameter* p = request->getParam(0);
     int angle = p->value().toInt();
-    pen->setRawValue(angle);
-    request->send(200, "text/plain", "OK"); 
+    pen->moveTo(angle);
+    request->send(200, "text/plain", "OK");
 }
 
 void SetTopDistancePhase::estepsCalibration(AsyncWebServerRequest* request) {
-    Serial.println("Extending 1000mm");
+    Log.println("Extending 1000mm");
     movement->extend1000mm();
     request->send(200, "text/plain", "OK");
 }

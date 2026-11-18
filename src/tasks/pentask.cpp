@@ -5,18 +5,14 @@ PenTask::PenTask(bool up, Pen *pen) {
 }
 
 void PenTask::startRunning() {
-    Serial.println("Starting pen task " + String(up));
+    // Non-blocking: the pen ramps in Pen::update() from loop(); isDone() waits for it.
     if (up) {
-        Serial.println("Pen is going up");
-        pen->slowUp();
+        pen->up();
     } else {
-        Serial.println("Pen is going down");
-        pen->slowDown();
+        pen->down();
     }
-    Serial.println("Pen task ran");
 }
 
 bool PenTask::isDone() {
-    Serial.println("Pen task is done");
-    return true;
+    return !pen->isMoving();
 }

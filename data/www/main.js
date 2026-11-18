@@ -10,6 +10,8 @@ window.onload = function () {
 };
 
 let uploadConvertedCommands = null;
+let uploadPreviewDataUrl = null;
+let penCal = {up: 90, down: 60, min: 0, max: 180};
 
 async function checkIfExtendedToHome(extendToHomeTime) {
     await new Promise(r => setTimeout(r, extendToHomeTime * 1000));
@@ -46,8 +48,9 @@ function init() {
 
         $.post(custom.url, custom.data || {}, function(state) {
             adaptToState(state);
-        }).fail(function() {
-            alert(`${custom.commandName} command failed`);
+        }).fail(function(xhr) {
+            const detail = xhr && xhr.responseText ? `: ${xhr.responseText}` : "";
+            alert(`${custom.commandName} command failed${detail}`);
             location.reload();
         });
     }
@@ -97,44 +100,83 @@ function init() {
         });
     });
     
-    function getServoValueFromInputValue() {
-        const inputValue = parseInt($("#servoRange").val());
-        const value = 90 - inputValue;
-        let normalizedValue;
-        if (value < 0) {
-            normalizedValue = 0;
-        } else if (value > 90) {
-            normalizedValue = 90;
-        } else {
-            normalizedValue = value;
-        }
-
-        return normalizedValue;
-    }
-
-    $("#servoRange").on('input', $.throttle(250, function (e) {
-        const servoValue = getServoValueFromInputValue();
-        $.post("/setServo", {angle: servoValue});
-    }));
-
-    const stepVaule = 5;
-    $("#penMinus").click(function() {
-        $("#servoRange")[0].stepDown(stepVaule);
-        $("#servoRange").trigger('input');
+    // Pen calibration. Values are raw servo angles; lower = towards the wall.
+    // The firmware ramps every move and clamps to the soft limits.
+    const sendServo = $.throttle(250, function (angle) {
+        $.post("/setServo", {angle});
     });
 
-    $("#penPlus").click(function() {
-        $("#servoRange")[0].stepUp(stepVaule);
-        $("#servoRange").trigger('input');
+    $("#servoRange").on('input', function () {
+        penCal.down = clampAngle(parseInt($(this).val()));
+        renderPenCalibration();
+        sendServo(penCal.down);
     });
+
+    $(".penDownStep").click(function() {
+        penCal.down = clampAngle(penCal.down + parseInt($(this).data("step")));
+        renderPenCalibration();
+        sendServo(penCal.down);
+    });
+
+    $(".penUpStep").click(function() {
+        penCal.up = clampAngle(penCal.up + parseInt($(this).data("step")));
+        renderPenCalibration();
+        sendServo(penCal.up);
+    });
+
+    $("#penTestUp").click(() => $.post("/setServo", {angle: penCal.up}));
+    $("#penTestDown").click(() => $.post("/setServo", {angle: penCal.down}));
 
     $("#setPenDistance").click(function () {
-        const inputValue = getServoValueFromInputValue();
+        if (penCal.down >= penCal.up &&
+            !confirm(`The down angle (${penCal.down}°) is not lower than the up angle (${penCal.up}°). Lower angles move the pen towards the wall. Save anyway?`)) {
+            return;
+        }
         doneWithPhase({
             url: "/setPenDistance",
-            data: {angle: inputValue},
+            data: {angle: penCal.down, up: penCal.up},
             commandName: "Set Pen Distance",
         });
+    });
+
+    $("#resumeSession").click(function() {
+        doneWithPhase({
+            url: "/resumeSession",
+            commandName: "Resume session",
+        });
+    });
+
+    $("#useSavedDrawing").click(function() {
+        doneWithPhase({
+            url: "/useSavedDrawing",
+            commandName: "Use saved drawing",
+        });
+    });
+
+    $(".gotoPhase").click(function() {
+        doneWithPhase({
+            url: "/gotoPhase",
+            data: {phase: $(this).data("phase")},
+            commandName: "Go back",
+        });
+    });
+
+    $("#goHome").click(function() {
+        const button = $(this);
+        button.prop("disabled", true);
+        $("#goHomeStatus").text("Moving...");
+        $.post("/goHome", {})
+            .done(function(seconds) {
+                $("#goHomeStatus").text(`Moving to home, about ${seconds}s. Check the pen ends up where you expect.`);
+                setTimeout(() => {
+                    button.prop("disabled", false);
+                    $("#goHomeStatus").text("Done. If the position looks wrong, use Re-home belts.");
+                }, (parseInt(seconds) + 1) * 1000);
+            })
+            .fail(function(xhr) {
+                button.prop("disabled", false);
+                $("#goHomeStatus").text("Failed: " + xhr.responseText);
+            });
     });
 
     async function getUploadedSvgString() {
@@ -267,6 +309,7 @@ function init() {
                 uploadConvertedCommands = e.data.payload.commands.join('\n');
                 const resultSvgJson = e.data.payload.svgJson;
                 const resultDataUrl = svgControl.convertJsonToDataURL(resultSvgJson, svgControl.getTargetWidth(), svgControl.getTargetHeight());
+                uploadPreviewDataUrl = resultDataUrl;
 
                 const totalDistanceM = +(e.data.payload.distance / 1000).toFixed(1);
                 const drawDistanceM = +(e.data.payload.drawDistance / 1000).toFixed(1);
@@ -361,8 +404,27 @@ function init() {
         const formData = new FormData();
         formData.append("commands", commandsBlob);
 
+        const [sourceFile] = $("#uploadSvg")[0].files;
+        const drawingName = sourceFile ? sourceFile.name : "drawing";
+
+        // Store the preview on Mural first (best effort) so the drawing can be
+        // recognised and re-used after a reboot.
+        const previewData = new FormData();
+        previewData.append("preview", new Blob([uploadPreviewDataUrl || ""], {type: "text/plain"}));
         $.ajax({
-            url: "/uploadCommands",
+            url: "/uploadPreview",
+            data: previewData,
+            processData: false,
+            contentType: false,
+            type: 'POST',
+        }).always(function() {
+            uploadCommandsFile(formData, drawingName);
+        });
+    });
+
+    function uploadCommandsFile(formData, drawingName) {
+        $.ajax({
+            url: "/uploadCommands?name=" + encodeURIComponent(drawingName),
             data: formData,
             processData: false,
             contentType: false,
@@ -390,14 +452,17 @@ function init() {
                 return xhr;
             },
         });
-    });
-
-
+    }
 
     $("#beginDrawing").click(function() {
-        $(".muralSlide").hide();
-        $("#drawingBegan").show();
-        $.post("/run", {});
+        $.post("/run", {})
+            .done(function() {
+                $(".muralSlide").hide();
+                $("#drawingBegan").show();
+            })
+            .fail(function(xhr) {
+                alert("Couldn't start drawing: " + (xhr.responseText || "no response"));
+            });
     });
 
     $("#reset").click(function() {
@@ -428,7 +493,9 @@ function init() {
     });
 
     $("#parkServoTool").click(function() {
-        $.post("/setServo", {angle: 0});
+        // Previously drove to 0 deg, the far end of travel, which can stall the servo
+        // against its slot. "Up" is the calibrated rest position.
+        $.post("/servo", {action: "up"});
     });
 
     $("#estepsTool").click(function() {
@@ -440,6 +507,34 @@ function init() {
     toolsModal.addEventListener('hidden.bs.modal', function (event) {
         client.rightRetractUp();
         client.leftRetractUp();
+    });
+
+    // Collapsible log panel - polls /log only while open.
+    let logTimer = null;
+    function refreshMainLog() {
+        $.get("/log").done(function(text) {
+            const log = $("#mainLog")[0];
+            const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+            $("#mainLog").text(text || "(empty)");
+            if (atBottom) log.scrollTop = log.scrollHeight;
+        }).fail(function() {
+            $("#mainLog").text("Can't reach Mural (rebooting, or drawing - the web UI is off while drawing).");
+        });
+    }
+    $("#toggleLog").click(function() {
+        const log = $("#mainLog");
+        if (log.is(":visible")) {
+            log.hide();
+            $(this).text("Show log");
+            clearInterval(logTimer);
+            logTimer = null;
+        } else {
+            log.show();
+            $(this).text("Hide log");
+            refreshMainLog();
+            log[0].scrollTop = log[0].scrollHeight;
+            logTimer = setInterval(refreshMainLog, 2000);
+        }
     });
 
     svgControl.initSvgControl();
@@ -516,7 +611,7 @@ function adaptToState(state) {
             $("#retractBeltsSlide").show();
             break;
         case "SetTopDistance":
-            $("#distanceBetweenAnchorsSlide").show();
+            showSetTopDistance(state);
             break;
         case "ExtendToHome":
             $("#extendToHomeSlide").show();
@@ -527,18 +622,104 @@ function adaptToState(state) {
             }
             break;
         case "PenCalibration":
-            $.post("/setServo", {angle: 90});
+            // No automatic servo move here any more - the pen is already up.
+            penCal = {
+                up: state.pen.up,
+                down: state.pen.calibrated ? state.pen.down : Math.max(state.pen.min, state.pen.up - 30),
+                min: state.pen.min,
+                max: state.pen.max,
+            };
+            renderPenCalibration();
             $("#penCalibrationSlide").show();
             break;
         case "SvgSelect":
-            $("#svgUploadSlide").show();
+            showSvgSelect(state);
             break;
         case "BeginDrawing":
-            $("#beginDrawingSlide").show();
+            showBeginDrawing(state);
             break;
         default:
             alert("Unrecognized phase");
     }
+}
+
+function clampAngle(value) {
+    return Math.max(penCal.min, Math.min(penCal.max, value));
+}
+
+function renderPenCalibration() {
+    $("#penDownValue").text(penCal.down);
+    $("#penUpValue").text(penCal.up);
+    $("#servoRange").attr({min: penCal.min, max: penCal.max}).val(penCal.down);
+}
+
+function formatMm(mm) {
+    return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.round(mm)} mm`;
+}
+
+function showSetTopDistance(state) {
+    if (state.savedTopDistance > 0 && !$("#distanceInput").val()) {
+        $("#distanceInput").val(state.savedTopDistance);
+    }
+
+    const pos = state.savedPosition;
+    if (pos && pos.valid) {
+        const penText = state.pen.calibrated
+            ? `pen up ${state.pen.up}° / down ${state.pen.down}°`
+            : "pen not calibrated yet";
+        $("#resumeDetails").text(
+            `Hangers ${pos.topDistance} mm apart, last position x=${pos.x.toFixed(0)} y=${pos.y.toFixed(0)} mm, ${penText}.`);
+        $("#resumeCard").show();
+        $("#noResumeNote").hide();
+    } else {
+        $("#resumeCard").hide();
+        if (pos && pos.reason) {
+            $("#noResumeNote").text(`Resume isn't available: ${pos.reason}, so the belts need re-homing.`).show();
+        } else {
+            $("#noResumeNote").hide();
+        }
+    }
+    $("#distanceBetweenAnchorsSlide").show();
+}
+
+function showSvgSelect(state) {
+    const saved = state.savedDrawing;
+    if (saved && saved.available) {
+        let details = `${saved.name || "drawing"} · ${formatMm(saved.distance)} of travel`;
+        if (!saved.compatible) {
+            details += ` · made for hangers ${saved.topDistance} mm apart (now ${state.topDistance} mm), so it can't be re-used`;
+        }
+        $("#savedDrawingDetails").text(details);
+        $("#useSavedDrawing").prop("disabled", !saved.compatible);
+
+        const img = $("#savedDrawingPreview");
+        img.hide().removeAttr("src");
+        if (saved.hasPreview) {
+            $.get("/savedPreview").done(function(dataUrl) {
+                if (dataUrl && dataUrl.startsWith("data:")) {
+                    img.attr("src", dataUrl).show();
+                }
+            });
+        }
+        $("#savedDrawingCard").show();
+    } else {
+        $("#savedDrawingCard").hide();
+    }
+    $("#svgUploadSlide").show();
+}
+
+function showBeginDrawing(state) {
+    const summary = $("#readySummary").empty();
+    const item = (label, value) => $("<li class='list-group-item d-flex justify-content-between'></li>")
+        .append($("<span></span>").text(label))
+        .append($("<span class='text-muted'></span>").text(value));
+    summary.append(item("Hangers", `${state.topDistance} mm`));
+    summary.append(item("Pen", `up ${state.pen.up}° / down ${state.pen.down}°`));
+    if (state.savedDrawing && state.savedDrawing.available) {
+        summary.append(item("Drawing", `${state.savedDrawing.name} (${formatMm(state.savedDrawing.distance)})`));
+    }
+    $("#goHomeStatus").text("");
+    $("#beginDrawingSlide").show();
 }
 
 function getInfillDensity() {

@@ -11,6 +11,9 @@
 #include "pen.h"
 #include "display.h"
 #include "phases/phasemanager.h"
+#include "persist.h"
+#include "logger.h"
+#include "diagnostics.h"
 
 AsyncWebServer server(80);
 
@@ -39,18 +42,22 @@ void setup()
 {
     delay(10);
     Serial.begin(9600);
+    Log.printf("\nMural firmware %s (built %s %s)\n", MURAL_FW_VERSION, __DATE__, __TIME__);
+
+    // First thing: record why we (re)booted - brownouts show up here.
+    persist.begin();
 
     if (!LittleFS.begin(true)) {
-        Serial.println("An Error has occurred while mounting LittleFS");
+        Log.println("An Error has occurred while mounting LittleFS");
         return;
     }
 
     display = new Display();
-    Serial.println("Initialized display");
+    Log.println("Initialized display");
 
     // initialize movement right away or the motors can start creeping due to floating output
     movement = new Movement(display);
-    Serial.println("Initialized steppers");
+    Log.println("Initialized steppers");
 
     bool resetAfterConnect = false;
     std::function<void()> serverCallback = [&] () {
@@ -66,21 +73,21 @@ void setup()
     wifiManager.autoConnect("Mural");
 
     if (resetAfterConnect) {
-        Serial.println("Connected to WiFi through captive portal, restarting...");
+        Log.println("Connected to WiFi through captive portal, restarting...");
         ESP.restart();
     }
     
-    Serial.println("Connected to wifi");
+    Log.println("Connected to wifi");
 
     MDNS.begin("mural");
 
-    Serial.println("Started mDNS for mural");
+    Log.println("Started mDNS for mural");
 
     pen = new Pen();
-    Serial.println("Initialized servo");
+    Log.println("Initialized servo");
 
     runner = new Runner(movement, pen, display);
-    Serial.println("Initialized runner");
+    Log.println("Initialized runner");
 
     server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("no-cache");
 
@@ -122,6 +129,18 @@ void setup()
         handleUpload
     );
 
+    server.on("/resumeSession", HTTP_POST, [](AsyncWebServerRequest *request)
+              { phaseManager->resumeSession(request); });
+
+    server.on("/useSavedDrawing", HTTP_POST, [](AsyncWebServerRequest *request)
+              { phaseManager->useSavedDrawing(request); });
+
+    server.on("/gotoPhase", HTTP_POST, [](AsyncWebServerRequest *request)
+              { phaseManager->gotoPhase(request); });
+
+    server.on("/goHome", HTTP_POST, [](AsyncWebServerRequest *request)
+              { phaseManager->goHome(request); });
+
     server.on(
         "/downloadCommands", HTTP_GET,
         [](AsyncWebServerRequest *request) {
@@ -131,12 +150,13 @@ void setup()
 
     server.onNotFound(notFound);
 
-    Serial.println("Finished setting up the server");
+    Log.println("Finished setting up the server");
 
     phaseManager = new PhaseManager(movement, pen, runner, &server);
+    registerDiagnosticsRoutes(&server, movement, pen, runner, phaseManager, display);
 
     server.begin();
-    Serial.println("Server started");
+    Log.println("Server started");
 
     display->displayHomeScreen("http://" + WiFi.localIP().toString(), "or", "http://mural.local");
     
@@ -145,6 +165,10 @@ void setup()
 void loop()
 {
     movement->runSteppers();
+    // Right after stepping: between drawing increments the motors are momentarily
+    // idle, which is when a consistent position can be saved.
+    persist.loopPosition(movement, runner->isRunning());
+    pen->update();
     runner->run();
     phaseManager->getCurrentPhase()->loopPhase();
 }

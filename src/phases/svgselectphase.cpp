@@ -1,5 +1,7 @@
 #include "svgselectphase.h"
 #include "LittleFS.h"
+#include "persist.h"
+#include "logger.h"
 
 SvgSelectPhase::SvgSelectPhase(PhaseManager* manager) {
     this->manager = manager;
@@ -9,24 +11,26 @@ void SvgSelectPhase::handleUpload(AsyncWebServerRequest *request, String filenam
 {
     if (!index)
     {
+        // The old drawing is about to be overwritten - don't offer it for re-use any more.
+        persist.invalidateDrawing();
         if (LittleFS.exists("/commands")) {
             LittleFS.remove("/commands");
         }
 
-        Serial.printf("%d bytes total, %d bytes free\n",  LittleFS.totalBytes(), LittleFS.totalBytes() - LittleFS.usedBytes());
-        Serial.printf("Upload size: %d bytes\n", request->contentLength());
+        Log.printf("%d bytes total, %d bytes free\n",  LittleFS.totalBytes(), LittleFS.totalBytes() - LittleFS.usedBytes());
+        Log.printf("Upload size: %d bytes\n", request->contentLength());
 
         if (LittleFS.totalBytes() -  LittleFS.usedBytes() < request->contentLength()) {
-            Serial.println("Not enough space on LittleFS");
+            Log.println("Not enough space on LittleFS");
             request->send(400, "text/plain", "Not enough space for upload");
             return;
         }
-            
+
         request->_tempFile = LittleFS.open("/commands", "w");
-        Serial.println("Upload started");
+        Log.println("Upload started");
     }
 
-    if (len)
+    if (len && request->_tempFile)
     {
         // stream the incoming chunk to the opened file
         request->_tempFile.write(data, len);
@@ -34,9 +38,26 @@ void SvgSelectPhase::handleUpload(AsyncWebServerRequest *request, String filenam
 
     if (final)
     {
+        if (!request->_tempFile) {
+            Log.println("Upload failed - file was never opened");
+            return;
+        }
         request->_tempFile.close();
-        Serial.println("Upload finished");
-        manager->setPhase(PhaseManager::RetractBelts);
+        Log.println("Upload finished");
+
+        // Promote the preview that the UI uploaded just before the commands.
+        if (LittleFS.exists("/preview.txt")) {
+            LittleFS.remove("/preview.txt");
+        }
+        if (LittleFS.exists("/preview.tmp")) {
+            LittleFS.rename("/preview.tmp", "/preview.txt");
+        }
+
+        String name = request->hasParam("name") ? request->getParam("name")->value() : String("drawing");
+        persist.saveDrawing(manager->getMovement()->getTopDistance(), name);
+
+        manager->setDrawingReady(true);
+        manager->advance();
     }
 }
 

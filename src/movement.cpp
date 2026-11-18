@@ -1,5 +1,6 @@
 #include "movement.h"
 #include "display.h"
+#include "logger.h"
 #include <stdexcept>
 
 Movement::Movement(Display *display)
@@ -25,7 +26,7 @@ Movement::Movement(Display *display)
 };
 
 void Movement::setTopDistance(const int distance) {
-    Serial.printf("Top distance set to %s\n", String(distance));
+    Log.printf("Top distance set to %d\n", distance);
     topDistance = distance;                         // = d_pins [mm]
 
     minSafeY = safeYFraction * topDistance;         // = top_margin * d_pins [mm]
@@ -55,8 +56,45 @@ void Movement::setOrigin()
     homed = true;
 };
 
+void Movement::invalidatePosition() {
+    if (homed) {
+        Log.println("Position is no longer known (belts moved manually)");
+    }
+    homed = false;
+    positionInvalidated = true;
+}
+
+bool Movement::consumePositionInvalidated() {
+    if (positionInvalidated) {
+        positionInvalidated = false;
+        return true;
+    }
+    return false;
+}
+
+void Movement::restorePosition(int distance, long leftSteps, long rightSteps, double x, double y) {
+    setTopDistance(distance);
+    leftMotor->setCurrentPosition(leftSteps);
+    rightMotor->setCurrentPosition(rightSteps);
+    X = x;
+    Y = y;
+    homed = true;
+    startedHoming = false;
+    moving = false;
+    Log.printf("Position restored (unverified): x=%.1f y=%.1f leftSteps=%ld rightSteps=%ld\n", x, y, leftSteps, rightSteps);
+}
+
+float Movement::moveToHome() {
+    auto home = getHomeCoordinates();
+    Log.printf("Moving to home position %.1f, %.1f\n", home.x, home.y);
+    return beginLinearTravel(home.x, home.y, moveSpeedSteps);
+}
+
 void Movement::leftStepper(const int dir)
 {
+    if (dir != 0) {
+        invalidatePosition();
+    }
     if (dir > 0)
     {
         leftMotor->move(INFINITE_STEPS);
@@ -78,6 +116,9 @@ void Movement::leftStepper(const int dir)
 
 void Movement::rightStepper(const int dir)
 {
+    if (dir != 0) {
+        invalidatePosition();
+    }
     if (dir > 0)
     {
         rightMotor->move(INFINITE_STEPS);
@@ -125,7 +166,7 @@ void Movement::runSteppers()
         if (leftMotor->distanceToGo() == 0 && rightMotor->distanceToGo() == 0)
         {
             moving = false;
-            //Serial.printf("Motion complete. Left steps: %ld, Right steps: %ld\n", leftMotor->currentPosition(), rightMotor->currentPosition());
+            //Log.printf("Motion complete. Left steps: %ld, Right steps: %ld\n", leftMotor->currentPosition(), rightMotor->currentPosition());
         }
     }
 };
@@ -222,12 +263,12 @@ double Movement::solveTorqueEquilibrium(const double phi_L, const double phi_R, 
         if (abs(T_delta) < abs(T_delta_best)){
             T_delta_best = T_delta;
             gamma_best = gamma;
-            // Serial.printf("  solveTorqueEquilibrium: T_delta=%1.4f @ gamma=%1.4f, T_delta_best=%1.4f @ gamma_best=%1.4f\n",
+            // Log.printf("  solveTorqueEquilibrium: T_delta=%1.4f @ gamma=%1.4f, T_delta_best=%1.4f @ gamma_best=%1.4f\n",
             //     T_delta, gamma, T_delta_best, gamma_best);
         } else {
             // There is only one zero crossing: terminate early if T_delta gets worse than best one so far.
 
-            // Serial.printf("  solveTorqueEquilibrium: T_delta=%1.4f @ gamma=%1.4f, T_delta_best=%1.4f @ gamma_best=%1.4f Exit function.\n",
+            // Log.printf("  solveTorqueEquilibrium: T_delta=%1.4f @ gamma=%1.4f, T_delta_best=%1.4f @ gamma_best=%1.4f Exit function.\n",
             //     T_delta, gamma, T_delta_best, gamma_best);
             return gamma_best;
         }
@@ -301,13 +342,13 @@ Movement::Lengths Movement::getBeltLengths(const double x, const double y) {
 
         const double gamma_last = gamma;
         gamma = solveTorqueEquilibrium(phi_L, phi_R, F_L, F_R, gamma);
-        // Serial.printf(" Solver loop: i=%d, frameX=%1.2f, frameY=%1.2f, phi_L=%1.4f, phi_R=%1.4f, F_L=%1.2f, F_R=%1.2f, gamma=%1.4f\n", 
+        // Log.printf(" Solver loop: i=%d, frameX=%1.2f, frameY=%1.2f, phi_L=%1.4f, phi_R=%1.4f, F_L=%1.2f, F_R=%1.2f, gamma=%1.4f\n", 
         //     i, frameX, frameY, phi_L, phi_R, F_L, F_R, gamma);
         debug_step_count = i;
         if (abs(gamma_last - gamma) < gamma_delta_termination) break;
     }
     gamma_last_position = gamma;
-    // Serial.printf("Solver found: frameX=%1.2f, frameY=%1.2f, phi_L=%1.4f, phi_R=%1.4f, F_L=%1.2f, F_R=%1.2f, debug_step_count=%d, gamma=%1.4f\n", 
+    // Log.printf("Solver found: frameX=%1.2f, frameY=%1.2f, phi_L=%1.4f, phi_R=%1.4f, F_L=%1.2f, F_R=%1.2f, debug_step_count=%d, gamma=%1.4f\n", 
     //     frameX, frameY, phi_L, phi_R, F_L, F_R, debug_step_count, gamma);
 
     double leftX, leftY;
@@ -337,19 +378,19 @@ float Movement::beginLinearTravel(double x, double y, int speed)
     X = x;
     Y = y;
     if (topDistance == -1 || !homed) {
-        Serial.println("Not ready");
+        Log.println("Not ready");
         throw std::invalid_argument("not ready");
     }
 
     if (x < 0 || (x - 1) > width)
     {
-        Serial.println("Invalid x");
+        Log.println("Invalid x");
         throw std::invalid_argument("Invalid x");
     }
 
     if (y < 0)
     {
-        Serial.println("Invalid y");
+        Log.println("Invalid y");
         throw std::invalid_argument("Invalid y");
     }
 
@@ -374,7 +415,7 @@ float Movement::beginLinearTravel(double x, double y, int speed)
         leftSpeed = deltaLeft / moveTime;
     }
 
-    //Serial.printf("Begin movement: X(%s) Y(%s) UnsafeX(%s) UnsafeY(%s) leftLeg(%s) rightLeg(%s) deltaLeft(%s) deltaRight(%s) leftSpeed(%s) rightSpeed(%s) \n", String(x), String(y), String(unsafeX), String(unsafeY), String(leftLeg), String(rightLeg), String(deltaLeft), String(deltaRight), String(leftSpeed), String(rightSpeed));
+    //Log.printf("Begin movement: X(%s) Y(%s) UnsafeX(%s) UnsafeY(%s) leftLeg(%s) rightLeg(%s) deltaLeft(%s) deltaRight(%s) leftSpeed(%s) rightSpeed(%s) \n", String(x), String(y), String(unsafeX), String(unsafeY), String(leftLeg), String(rightLeg), String(deltaLeft), String(deltaRight), String(leftSpeed), String(rightSpeed));
     leftMotor->moveTo(leftLegSteps);
     leftMotor->setSpeed(leftSpeed);
     
@@ -397,19 +438,20 @@ double Movement::getWidth() {
 
 Movement::Point Movement::getCoordinates() {
     if (X == -1 || Y == -1) {
-        Serial.println("Not ready to get coordinates");
+        Log.println("Not ready to get coordinates");
         throw std::invalid_argument("not ready");
     }
 
     if (moving) {
-        Serial.println("Can't get coordinates while moving");
+        Log.println("Can't get coordinates while moving");
         throw std::invalid_argument("not ready");
     }
     return Movement::Point(X, Y);
 }
 
 void Movement::extend1000mm() {
-    const int steps = int((1000 / circumference) * stepsPerRotation);   
+    invalidatePosition();
+    const int steps = int((1000 / circumference) * stepsPerRotation);
 
     leftMotor->move(steps);
     leftMotor->setSpeed(moveSpeedSteps);
