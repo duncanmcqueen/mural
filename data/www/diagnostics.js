@@ -65,7 +65,7 @@
             ["Last reset", sys.resetReason, sys.resetReason.startsWith("BROWNOUT") || sys.resetReason.startsWith("Crash") ? "text-danger fw-bold" : ""],
             ["Reset history", sys.resetHistory.join(" ← ")],
             ["Boot count", sys.bootCount],
-            ["Phase", sys.phase + (sys.drawing ? ` (drawing ${sys.progress}%)` : "")],
+            ["Status", sys.drawing ? `${sys.phase}, ${sys.progress}%` : sys.phase],
             ["Free memory", `${kb(sys.freeHeap)} (lowest ${kb(sys.minFreeHeap)})`],
             ["WiFi signal", `${sys.wifiRssi} dBm${sys.wifiRssi < -75 ? " (weak)" : ""}`],
             ["IP", sys.ip],
@@ -108,30 +108,33 @@
                 $("#connection").removeClass("alert-warning alert-secondary").addClass("alert-success").text("Connected");
                 $("main").removeClass("stale");
                 render(d);
-                if (!logMovesTouched) {
+                if (!settingTouched) {
                     $("#logDrawingMoves").prop("checked", d.system.logDrawingMoves);
+                    $("#webWhileDrawing").prop("checked", d.system.webWhileDrawing);
                 }
+                $("#logDrawingMoves,#webWhileDrawing").prop("disabled", d.system.drawing);
             })
             .fail(function () {
                 const since = lastOk ? ` (last update ${duration(Date.now() - lastOk)} ago)` : "";
                 $("#connection").removeClass("alert-success alert-secondary").addClass("alert-warning")
-                    .text("Can't reach Mural — it may be rebooting, drawing (the web UI is off while drawing), or out of WiFi range" + since);
+                    .text("Can't reach Mural — it may be rebooting, drawing with the web UI turned off, or out of WiFi range" + since);
             })
             .always(function () {
                 setTimeout(poll, POLL_MS);
             });
     }
 
-    let logMovesTouched = false;
-    $("#logDrawingMoves").change(function () {
-        logMovesTouched = true;
-        const enabled = $(this).is(":checked");
-        $.post("/diagSettings", {logDrawingMoves: enabled ? 1 : 0})
+    let settingTouched = false;
+    $("#logDrawingMoves,#webWhileDrawing").change(function () {
+        settingTouched = true;
+        const data = {};
+        data[this.id] = $(this).is(":checked") ? 1 : 0;
+        $.post("/diagSettings", data)
             .fail(function (xhr) {
                 alert("Couldn't change setting: " + (xhr.responseText || "no response"));
             })
             .always(function () {
-                logMovesTouched = false; // resync with the device on the next poll
+                settingTouched = false; // resync with the device on the next poll
             });
     });
 

@@ -77,41 +77,102 @@
       <div id="loadingSlide" class="muralSlide" style="display:none;">
         <div class="spinner-border mb-5 loading" role="status"></div>
       </div>
-      <div id="retractBeltsSlide" class="muralSlide" style="display:none;">
-        <h3 class="mb-2 fw-normal">Retract belts</h3>
-        <h6 class="mb-5"><small class="text-muted">Place the belt loops on the homing screws and retract the belts until the motors stall. Don't let the motors stall for too long.</small></h6>
-        <div class="form-check form-switch mb-5">
-          <input class="form-check-input" style="transform: scale(2);" type="checkbox" role="switch" id="leftMotorToggle">
-          <label class="form-check-label" for="leftMotorToggle">Left motor</label>
+
+      <!-- Overview: every setup step, its status, and what to do next -->
+      <div id="overviewSlide" class="muralSlide" style="display:none;">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3 class="mb-0 fw-normal">Mural</h3>
+          <div data-bs-toggle="modal" data-bs-target="#toolsModal" role="button" title="Tools"><i class="bi-gear fs-3"></i></div>
         </div>
-        <div class="form-check form-switch mb-5">
-          <input class="form-check-input" style="transform: scale(2);" type="checkbox" role="switch" id="rightMotorToggle">
-          <label class="form-check-label" for="rightMotorToggle">Right motor</label>
-        </div>
-        <button class="w-100 btn btn-lg btn-primary mb-5" id="beltsRetracted">Belts are retracted</button>
-      </div>
-      <div id="distanceBetweenAnchorsSlide" class="muralSlide" style="display:none;">
-        <h3 class="mb-2 fw-normal">Distance between hangers</h3>
-        <div class="card mb-4 text-start" id="resumeCard" style="display:none;">
-          <div class="card-body">
-            <h5 class="card-title">Resume previous session?</h5>
-            <p class="card-text small mb-2" id="resumeDetails"></p>
-            <p class="card-text small text-muted mb-3">Skips belt retraction and homing by trusting the last saved position. Only use this if Mural hasn't been moved or slipped since then. You can do a test move to home before drawing.</p>
-            <button class="w-100 btn btn-success" id="resumeSession">Resume (skip homing)</button>
+
+        <div class="list-group text-start mb-3">
+          <div class="list-group-item py-3" id="stepDistance">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div><i class="stepIcon"></i> <b>Hanger distance</b><div class="small text-muted stepDetail"></div></div>
+              <button class="btn btn-sm btn-outline-primary flex-shrink-0" id="editDistance">Edit</button>
+            </div>
+          </div>
+
+          <div class="list-group-item py-3" id="stepPosition">
+            <div><i class="stepIcon"></i> <b>Belt position</b><div class="small text-muted stepDetail"></div></div>
+            <div class="small text-warning mt-1" id="resumeWarning" style="display:none;">Only resume if Mural hasn't been moved or slipped since the position was saved. Do a test move to check.</div>
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              <button class="btn btn-sm btn-success" id="resumeSession" style="display:none;">Resume saved position</button>
+              <button class="btn btn-sm btn-outline-primary" id="testMove" style="display:none;">Test move to home</button>
+              <button class="btn btn-sm btn-outline-primary" id="rehome">Re-home</button>
+            </div>
+          </div>
+
+          <div class="list-group-item py-3" id="stepPen">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div><i class="stepIcon"></i> <b>Pen</b><div class="small text-muted stepDetail"></div></div>
+              <button class="btn btn-sm btn-outline-primary flex-shrink-0" id="editPen">Calibrate</button>
+            </div>
+          </div>
+
+          <div class="list-group-item py-3" id="stepDrawing">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div><i class="stepIcon"></i> <b>Drawing</b><div class="small text-muted stepDetail"></div></div>
+              <button class="btn btn-sm btn-outline-primary flex-shrink-0" id="chooseDrawing">Choose</button>
+            </div>
+            <img id="overviewPreview" class="img-thumbnail mt-2" style="display:none; width:100%;">
           </div>
         </div>
-        <p class="small text-muted mb-3" id="noResumeNote" style="display:none;"></p>
-        <h6 class="mb-5"><small class="text-muted">Distance between the two nails on which you are hanging Mural, in millimeters</small></h6>
-        <input type="number" class="form-control mb-5" id="distanceInput">
-        <button class="w-100 btn btn-lg btn-primary mb-5" id="setDistance">Set distance and re-home</button>
-        <div style="position:fixed; top: 10px; right: 10px;" data-bs-toggle="modal" data-bs-target="#toolsModal"><i class="bi-gear fs-2"></i></div>
+
+        <div class="small text-primary mb-2" id="moveStatus"></div>
+        <button class="w-100 btn btn-lg btn-primary mb-2" id="beginDrawing" disabled>Start drawing</button>
+        <div class="small text-muted mb-3" id="notReadyHint"></div>
+        <div class="alert alert-secondary small py-2 mb-3" id="lastDrawingNote" style="display:none;"></div>
       </div>
-      <div id="extendToHomeSlide" class="muralSlide" style="display:none;">
-        <h3 class="mb-2 fw-normal">Extend belts</h3>
-        <h6 class="mb-5"><small class="text-muted">The belts will extend to their home position. Make sure the belts are unobstructed and the motors do not skip, or the drawing accuracy may be affected</small></h6>
-        <button class="w-100 btn btn-lg btn-primary mb-5" id="extendToHome">Extend to home position</button>
-        <div class="spinner-border mb-5 loading" id="extendingSpinner" role="status" style="visibility:hidden;"></div>
+
+      <!-- Live drawing status (when the web UI is kept running while drawing) -->
+      <div id="drawingSlide" class="muralSlide" style="display:none;">
+        <h3 class="mb-1 fw-normal">Drawing</h3>
+        <div class="mb-3"><span class="badge fs-6" id="drawingStateBadge"></span></div>
+        <img id="drawingPreview" class="img-thumbnail mb-3" style="display:none;width:100%;">
+        <div class="progress mb-2" style="height: 24px;">
+          <div class="progress-bar" id="drawingProgressBar" role="progressbar" style="width: 0%;">0%</div>
+        </div>
+        <div class="small text-muted mb-3" id="drawingStats"></div>
+        <div class="d-grid gap-2 mb-3">
+          <button class="btn btn-lg btn-warning" id="pauseDrawing">Pause</button>
+          <button class="btn btn-lg btn-success" id="resumeDrawing" style="display:none;">Resume</button>
+          <button class="btn btn-outline-danger" id="stopDrawing">Stop drawing</button>
+        </div>
+        <p class="small text-muted mb-0">Pause lets the current short move finish and lifts the pen. Resume puts it back down and carries on from the same spot. Stop ends the drawing where Mural is; its position stays known, so you can move it home from the overview.</p>
+        <div class="small text-danger mt-2" id="drawingConnection"></div>
       </div>
+
+      <div id="distanceSlide" class="muralSlide" style="display:none;">
+        <h3 class="mb-2 fw-normal">Hanger distance</h3>
+        <h6 class="mb-4"><small class="text-muted">Distance between the two nails on which you are hanging Mural, in millimeters</small></h6>
+        <input type="number" class="form-control mb-2" id="distanceInput">
+        <p class="small text-warning mb-4" id="distanceWarning"></p>
+        <button class="w-100 btn btn-lg btn-primary mb-3" id="setDistance">Save</button>
+        <button class="w-100 btn btn-secondary mb-5 backToOverview">Back</button>
+      </div>
+
+      <div id="beltsSlide" class="muralSlide" style="display:none;">
+        <h3 class="mb-2 fw-normal">Re-home belts</h3>
+        <h6 class="mb-4"><small class="text-muted"><b>1.</b> Place the belt loops on the homing screws and retract each belt until its motor stalls. Don't let the motors stall for too long.</small></h6>
+        <div class="form-check form-switch mb-4 d-inline-block text-start">
+          <input class="form-check-input" style="transform: scale(2);" type="checkbox" role="switch" id="leftMotorToggle">
+          <label class="form-check-label ms-3" for="leftMotorToggle">Retract left belt</label>
+        </div>
+        <br>
+        <div class="form-check form-switch mb-4 d-inline-block text-start">
+          <input class="form-check-input" style="transform: scale(2);" type="checkbox" role="switch" id="rightMotorToggle">
+          <label class="form-check-label ms-3" for="rightMotorToggle">Retract right belt</label>
+        </div>
+        <h6 class="mb-3"><small class="text-muted"><b>2.</b> Extend to the home position. Make sure the belts are unobstructed and the motors don't skip, or drawing accuracy will suffer.</small></h6>
+        <button class="w-100 btn btn-lg btn-primary mb-3" id="extendToHome">Belts are retracted: extend to home</button>
+        <div id="extendingStatus" class="mb-3" style="display:none;">
+          <div class="spinner-border spinner-border-sm" role="status"></div>
+          <span class="small ms-1">Extending to home…</span>
+        </div>
+        <button class="w-100 btn btn-secondary mb-5 backToOverview" id="beltsBack">Back</button>
+      </div>
+
       <div id="penCalibrationSlide" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Pen calibration</h3>
         <h6 class="mb-4"><small class="text-muted">Insert the pen so it's close to, but not touching the wall and secure it with a bolt. Then set the <b>down</b> angle so the pen just touches the wall, and the <b>up</b> angle so it clears the wall without the servo straining against the end of its slot.</small></h6>
@@ -137,19 +198,13 @@
           <button type="button" class="btn btn-secondary" id="penTestUp">Test up</button>
           <button type="button" class="btn btn-secondary" id="penTestDown">Test down</button>
         </div>
-        <button class="w-100 btn btn-lg btn-primary mb-5" id="setPenDistance">Save pen calibration</button>
+        <button class="w-100 btn btn-lg btn-primary mb-3" id="setPenDistance">Save pen calibration</button>
+        <button class="w-100 btn btn-secondary mb-5" id="penBack">Back without saving</button>
       </div>
+
       <div id="svgUploadSlide" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Select SVG Image</h3>
-        <div class="card mb-3 text-start" id="savedDrawingCard" style="display:none;">
-          <div class="card-body">
-            <h5 class="card-title mb-1">Previous drawing</h5>
-            <img id="savedDrawingPreview" class="img-thumbnail mb-2" style="display:none;width:100%;">
-            <p class="card-text small mb-2" id="savedDrawingDetails"></p>
-            <button class="w-100 btn btn-success" id="useSavedDrawing">Use this drawing</button>
-          </div>
-        </div>
-        <h6 class="mb-2"><small class="text-muted">Or choose a new one. Use black and white line art SVGs for now</small></h6>
+        <h6 class="mb-2"><small class="text-muted">Use black and white line art SVGs for now</small></h6>
         <img id="sourceSvg" class="img-thumbnail mb-2 svg-control" style="display:none;width:100%;">
         <div class="container svg-control mb-2" style="display: none;">
           <div class="row">
@@ -159,7 +214,7 @@
                   <a class="up" href="#"></a>
                   <a class="right" href="#"></a>
                   <a class="down" href="#"></a>
-                  <a class="left" href="#"></a>  
+                  <a class="left" href="#"></a>
                 </nav>
               </div>
             </div>
@@ -174,7 +229,8 @@
           </div>
         </div>
         <input class="form-control form-control-lg mb-2" id="uploadSvg" type="file" accept=".svg">
-        <button class="w-100 btn btn-lg btn-primary mb-6" id="preview" disabled>Preview drawing</button>
+        <button class="w-100 btn btn-lg btn-primary mb-3" id="preview" disabled>Preview drawing</button>
+        <button class="w-100 btn btn-secondary mb-5 backToOverview">Back</button>
       </div>
       <div id="chooseRendererSlide" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Choose render type</h3>
@@ -200,29 +256,16 @@
       </div>
       <div id="uploadProgress" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Uploading...</h3>
-        <div class="progress mb-2" id="uploadProgress" role="progressbar" aria-label="Upload progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress mb-2" id="uploadProgressBar" role="progressbar" aria-label="Upload progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-bar" style="width: 0%"></div>
         </div>
         <div class="progress mb-2" id="verificationProgress" role="progressbar" aria-label="Verification progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-bar bg-success" style="width: 0%"></div>
         </div>
       </div>
-      <div id="beginDrawingSlide" class="muralSlide" style="display: none;">
-        <h3 class="mb-3 fw-normal">Mural is ready!</h3>
-        <ul class="list-group mb-4 text-start small" id="readySummary"></ul>
-        <button class="w-100 btn btn-lg btn-primary mb-4" id="beginDrawing">Begin Drawing</button>
-        <button class="w-100 btn btn-outline-primary mb-2" id="goHome">Test move: go to home position</button>
-        <div class="small text-muted mb-4" id="goHomeStatus"></div>
-        <div class="d-grid gap-2 mb-4">
-          <button class="btn btn-outline-secondary gotoPhase" data-phase="SvgSelect">Change drawing</button>
-          <button class="btn btn-outline-secondary gotoPhase" data-phase="PenCalibration">Recalibrate pen</button>
-          <button class="btn btn-outline-secondary gotoPhase" data-phase="RetractBelts">Re-home belts</button>
-        </div>
-        <button class="w-100 btn btn-lg btn-secondary mb-5" id="reset">Start over</button>
-      </div>
       <div id="drawingBegan" class="muralSlide" style="display: none;">
         <h3 class="mb-2 fw-normal">Drawing Started</h3>
-        <h6 class="mb-5"><small class="text-muted">Mural will not be accessible via your browser while the drawing is in progress. Please refresh the page once the drawing is finished.</small></h6>
+        <h6 class="mb-5"><small class="text-muted">The web UI is turned off while drawing (Diagnostics &rarr; "Keep web UI running while drawing"), so Mural won't be reachable until the drawing finishes. Refresh the page then.</small></h6>
       </div>
       <div class="mt-4 text-start">
         <button class="btn btn-sm btn-outline-secondary w-100" id="toggleLog">Show log</button>

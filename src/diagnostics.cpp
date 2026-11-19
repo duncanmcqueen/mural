@@ -10,7 +10,7 @@ namespace {
     Movement *gMovement;
     Pen *gPen;
     Runner *gRunner;
-    PhaseManager *gPhaseManager;
+    Controller *gController;
     Display *gDisplay;
 
     bool rejectIfDrawing(AsyncWebServerRequest *request) {
@@ -51,10 +51,11 @@ namespace {
         system["wifiRssi"] = WiFi.RSSI();
         system["ip"] = WiFi.localIP().toString();
         system["oledPresent"] = gDisplay->isPresent();
-        system["phase"] = gPhaseManager->getCurrentPhase()->getName();
+        system["phase"] = gController->statusName();
         system["drawing"] = gRunner->isRunning();
         system["progress"] = gRunner->getProgress();
         system["logDrawingMoves"] = persist.getLogDrawingMoves();
+        system["webWhileDrawing"] = persist.getWebWhileDrawing();
 
         const PenSettings &ps = gPen->getSettings();
         JsonObject &servo = root.createNestedObject("servo");
@@ -107,7 +108,7 @@ namespace {
         JsonObject &storage = root.createNestedObject("storage");
         storage["totalBytes"] = LittleFS.totalBytes();
         storage["usedBytes"] = LittleFS.usedBytes();
-        DrawingFileInfo info = PhaseManager::readDrawingFileInfo();
+        DrawingFileInfo info = Controller::readDrawingFileInfo();
         SavedDrawing drawing = persist.loadDrawing();
         storage["drawingName"] = drawing.name;
         storage["drawingValid"] = drawing.valid && info.valid;
@@ -198,11 +199,11 @@ namespace {
 }
 
 void registerDiagnosticsRoutes(AsyncWebServer *server, Movement *movement, Pen *pen, Runner *runner,
-                               PhaseManager *phaseManager, Display *display) {
+                               Controller *controller, Display *display) {
     gMovement = movement;
     gPen = pen;
     gRunner = runner;
-    gPhaseManager = phaseManager;
+    gController = controller;
     gDisplay = display;
 
     server->on("/diagnostics", HTTP_GET, handleDiagnostics);
@@ -219,6 +220,10 @@ void registerDiagnosticsRoutes(AsyncWebServer *server, Movement *movement, Pen *
         if (request->hasParam("logDrawingMoves", true)) {
             String v = request->getParam("logDrawingMoves", true)->value();
             persist.setLogDrawingMoves(v == "1" || v == "true");
+        }
+        if (request->hasParam("webWhileDrawing", true)) {
+            String v = request->getParam("webWhileDrawing", true)->value();
+            persist.setWebWhileDrawing(v == "1" || v == "true");
         }
         request->send(200, "text/plain", "OK");
     });

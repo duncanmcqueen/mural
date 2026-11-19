@@ -40,6 +40,7 @@ class Persist {
     uint8_t resetHistory[RESET_HISTORY] = {0};
     uint32_t bootCount = 0;
     bool logDrawingMoves = false;
+    bool webWhileDrawing = true;
 
     // position autosave bookkeeping
     int32_t lastSeenLeft = INT32_MIN, lastSeenRight = INT32_MIN;
@@ -79,6 +80,11 @@ class Persist {
     // and pushes older entries out of the log buffer.
     bool getLogDrawingMoves() { return logDrawingMoves; }
     void setLogDrawingMoves(bool enabled);
+
+    // Keep the web UI running while drawing (status, log, pause/stop). On by
+    // default; turning it off restores upstream behaviour (server stops at start).
+    bool getWebWhileDrawing() { return webWhileDrawing; }
+    void setWebWhileDrawing(bool enabled);
 
     unsigned long getLastPositionSaveMs() { return lastSaveMs; }
     unsigned long getLastPositionSaveDurationUs() { return lastSaveDurationUs; }

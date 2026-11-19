@@ -19,6 +19,32 @@ At the moment the servo and the ESP32 share the LM2596's 5V output. A stalled MG
    - Firmware help: **"Release servo when pen is up"** stops the holding current while the pen is up.
 7. **Check for binding.** With the servo released (Diagnostics → Release), move the pen carriage by hand. It should slide without catching. Look for elephant's foot or stringing on the printed parts in the slot, and a pen clamp screw that's too tight.
 
+## Stepper motor heat (motors at 70 °C+, PLA softens around 55–60 °C)
+
+On v1.1 the TMC2209s run standalone. The motor current is set by each driver's Vref potentiometer, not by the firmware, and the drivers apply it continuously, including while holding still. Heat goes up with the square of the current, and Mural's load is light: upstream v2 runs its drivers at 0.707 A RMS.
+
+A. **Lower the driver current (free, biggest effect).** On the BTT TMC2209 (0.11 Ω sense resistors), Vref ≈ 1.41 × I<sub>rms</sub>.
+
+   | Target | Vref | Heat compared with 1.0 A |
+   |---|---|---|
+   | 1.0 A | 1.41 V | 100% |
+   | 0.8 A | 1.13 V | ~64% |
+   | 0.7 A | 0.99 V | ~49% |
+   | 0.6 A | 0.85 V | ~36% |
+
+   1. With 12 V on and the motors idle, measure between the driver's GND and the potentiometer's centre (or its Vref pad). Note the starting value.
+   2. Set both drivers to about 0.85–0.9 V.
+   3. Re-home, draw something, then use **Test move to home**. If the pen returns to exactly the same spot, no steps were skipped. Check the top corners in particular, where belt tension is highest.
+   4. If steps are skipped, raise Vref by 0.1 V and test again.
+
+B. **Motor carriers in a heat-resistant material.** Reprint `left motor carrier` and `right motor carrier` in PETG (softens at about 80 °C) or ASA/ABS (about 100 °C). They're the parts in contact with the motors.
+
+C. **Heatsinks and airflow.** Stick a small aluminium heatsink (about 20–40 mm) on the back of each motor. Add vent slots if the cover encloses the motors. A small 5 V fan from the buck output is optional.
+
+D. **Driver UART wiring (firmware).** Connect each TMC2209's PDN/UART pin to the ESP32, as v2 does with GPIO 16/17 and addresses set by MS1/MS2. The firmware could then set the running current in software, use a lower holding current at standstill, and enable CoolStep, which reduces the current automatically under light load. This needs driver boards or extension boards that route the PDN/UART pin.
+
+What doesn't help much: slowing down (heat depends on current, not speed) or changing the supply voltage (the driver regulates current regardless). Turning the motors off when idle isn't an option, because they hold Mural on the wall.
+
 ## Measuring (needs new firmware code to read)
 
 8. **Supply voltage sensing (firmware).** A resistor divider into an ADC1 pin. Use only ADC1 pins (GPIO 32–39), because ADC2 doesn't work while WiFi is on. GPIO 34 and 35 are free and input-only.

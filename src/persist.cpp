@@ -38,6 +38,7 @@ void Persist::begin() {
     prefs.putBytes("rstHist", resetHistory, sizeof(resetHistory));
 
     logDrawingMoves = prefs.getBool("logMoves", false);
+    webWhileDrawing = prefs.getBool("webDraw", true);
 
     Log.printf("Boot #%u, reset reason: %s\n", bootCount, resetReasonToString(resetHistory[0]));
     if (resetHistory[0] == ESP_RST_BROWNOUT) {
@@ -133,6 +134,12 @@ int Persist::loadLastServoAngle() {
 
 void Persist::saveLastServoAngle(int angle) {
     prefs.putInt("srvLast", angle);
+}
+
+void Persist::setWebWhileDrawing(bool enabled) {
+    webWhileDrawing = enabled;
+    prefs.putBool("webDraw", enabled);
+    Log.printf("Web UI while drawing %s\n", enabled ? "enabled" : "disabled");
 }
 
 void Persist::setLogDrawingMoves(bool enabled) {

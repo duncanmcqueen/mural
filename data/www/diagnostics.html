@@ -83,7 +83,12 @@
           <input class="form-check-input" type="checkbox" role="switch" id="logDrawingMoves">
           <label class="form-check-label small" for="logDrawingMoves">Log every drawing move</label>
         </div>
-        <p class="small text-muted mb-0">Adds a "Starting the move to x, y" line per drawing command. Off by default: each line holds up the motors for a few milliseconds, which adds up over a drawing, and it quickly pushes older entries out of the log.</p>
+        <p class="small text-muted mb-3">Adds a "Starting the move to x, y" line per drawing command. Off by default: each line holds up the motors for a few milliseconds, which adds up over a drawing, and it quickly pushes older entries out of the log.</p>
+        <div class="form-check form-switch">
+          <input class="form-check-input diagSetting" type="checkbox" role="switch" id="webWhileDrawing">
+          <label class="form-check-label small" for="webWhileDrawing">Keep web UI running while drawing</label>
+        </div>
+        <p class="small text-muted mb-0">Lets you watch progress, read the log and pause or stop a drawing. The web server runs on the other CPU core from the drawing loop, so it shouldn't affect motion. If you notice stutters or blobs while a page is open, turn this off: the web UI then goes offline while drawing, as in the original firmware.</p>
       </div>
     </div>
 

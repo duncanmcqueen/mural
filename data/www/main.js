@@ -1,107 +1,402 @@
 import * as svgControl from './svgControl.js';
 import * as client from './client.js';
 
-let currentState = null;
+// Setup is an overview of independent steps (hanger distance, belt position, pen,
+// drawing). Each step opens its own screen and returns to the overview; the
+// firmware decides what is allowed from its current state.
 
+let currentState = null;
 let currentWorker = null;
+let uploadConvertedCommands = null;
+let uploadPreviewDataUrl = null;
+let penCal = {up: 90, down: 60, min: 0, max: 180};
+let previewKey = null;      // which saved drawing the overview thumbnail shows
+let movePollTimer = null;
 
 window.onload = function () {
     init();
 };
 
-let uploadConvertedCommands = null;
-let uploadPreviewDataUrl = null;
-let penCal = {up: 90, down: 60, min: 0, max: 180};
+// ---------- navigation ----------
 
-async function checkIfExtendedToHome(extendToHomeTime) {
-    await new Promise(r => setTimeout(r, extendToHomeTime * 1000));
-
-    const waitPeriod = 2000;
-    let done = false;
-    while (!done) {
-        try {
-            const state = await $.get("/getState");
-            if (state.phase !== 'ExtendToHome') {
-                adaptToState(state);
-                done = true;
-            } else {
-                await new Promise(r => setTimeout(r, waitPeriod));
-            }
-        } catch (err) {
-            alert("Failed to get current phase: " + err);
-            location.reload();
-        }
-    }
+function showSlide(id) {
+    $(".muralSlide").hide();
+    $("#" + id).show();
 }
 
-function init() {
-    function doneWithPhase(custom) {
-        $(".muralSlide").hide();
-        $("#loadingSlide").show();
-        if (!custom) {
-            custom = {
-                url: "/doneWithPhase",
-                data: {},
-                commandName: "Done With Phase",
-            };
-        }
+function fetchState() {
+    return $.getJSON("/getState").done(function (state) {
+        currentState = state;
+    });
+}
 
-        $.post(custom.url, custom.data || {}, function(state) {
-            adaptToState(state);
-        }).fail(function(xhr) {
-            const detail = xhr && xhr.responseText ? `: ${xhr.responseText}` : "";
-            alert(`${custom.commandName} command failed${detail}`);
-            location.reload();
+function goOverview() {
+    showSlide("loadingSlide");
+    fetchState()
+        .done(renderOverview)
+        .fail(function () {
+            alert("Couldn't reach Mural");
         });
+}
+
+function postForState(url, data, actionName) {
+    showSlide("loadingSlide");
+    return $.post(url, data || {})
+        .done(function (state) {
+            currentState = state;
+            renderOverview(state);
+        })
+        .fail(function (xhr) {
+            alert(`${actionName} failed: ${xhr.responseText || "no response"}`);
+            goOverview();
+        });
+}
+
+// Poll while a positioned move (extend to home / test move) runs, then call done().
+function waitForMoveToFinish(done) {
+    clearTimeout(movePollTimer);
+    const poll = function () {
+        fetchState()
+            .done(function (state) {
+                if (state.homing || state.moving) {
+                    movePollTimer = setTimeout(poll, 1000);
+                } else {
+                    done(state);
+                }
+            })
+            .fail(function () {
+                movePollTimer = setTimeout(poll, 2000);
+            });
+    };
+    movePollTimer = setTimeout(poll, 1000);
+}
+
+// ---------- overview ----------
+
+function formatMm(mm) {
+    return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.round(mm)} mm`;
+}
+
+function setStep(stepId, status, detail) {
+    const icons = {
+        done: "bi-check-circle-fill text-success",
+        todo: "bi-circle text-secondary",
+        warn: "bi-exclamation-circle-fill text-warning",
+    };
+    $(`#${stepId} .stepIcon`).attr("class", `stepIcon ${icons[status]}`);
+    $(`#${stepId} .stepDetail`).text(detail);
+}
+
+function renderOverview(state) {
+    currentState = state;
+    if (state.drawingActive) {
+        // A drawing is running (or paused) - show its status instead.
+        showDrawing(state);
+        return;
+    }
+    const ready = state.ready;
+    const moving = state.homing || state.moving;
+
+    const last = state.drawing;
+    if (last && last.lastOutcome === "finished") {
+        $("#lastDrawingNote").text(`Last drawing finished (${formatDuration(last.elapsedMs)} of drawing).`).show();
+    } else if (last && last.lastOutcome === "stopped") {
+        $("#lastDrawingNote").text(`Last drawing was stopped at ${last.progress}%. Mural is where it stopped; use "Test move to home" to park it.`).show();
+    } else {
+        $("#lastDrawingNote").hide();
     }
 
-    $("#beltsRetracted").click(async function() { 
+    // Hanger distance
+    setStep("stepDistance", ready.distance ? "done" : "todo",
+        ready.distance ? `${state.topDistance} mm apart` : "Not set");
+
+    // Belt position
+    const pos = state.position;
+    const saved = state.savedPosition;
+    let positionDetail;
+    let positionStatus;
+    if (pos.known) {
+        positionStatus = pos.restored && !pos.testMoveDone ? "warn" : "done";
+        positionDetail = pos.restored
+            ? `Restored from last session${pos.testMoveDone ? ", test move done" : " (unverified)"}`
+            : "Homed";
+    } else if (saved.valid) {
+        positionStatus = "todo";
+        positionDetail = `Unknown. A saved position is available (hangers ${saved.topDistance} mm, pen at x=${saved.x.toFixed(0)} y=${saved.y.toFixed(0)} mm).`;
+    } else {
+        positionStatus = "todo";
+        positionDetail = "Unknown, needs re-homing" + (saved.reason ? ` (${saved.reason})` : "");
+    }
+    setStep("stepPosition", positionStatus, positionDetail);
+    $("#resumeSession").toggle(!pos.known && saved.valid).prop("disabled", moving);
+    $("#resumeWarning").toggle((!pos.known && saved.valid) || (pos.restored && !pos.testMoveDone));
+    $("#testMove").toggle(pos.known).prop("disabled", moving);
+    $("#rehome").prop("disabled", moving || !ready.distance)
+        .text(pos.known ? "Re-home" : "Home belts");
+
+    // Pen
+    setStep("stepPen", ready.pen ? "done" : "todo",
+        ready.pen ? `Up ${state.pen.up}°, down ${state.pen.down}°` : "Not calibrated");
+    $("#editPen").text(ready.pen ? "Edit" : "Calibrate");
+
+    // Drawing
+    const drawing = state.drawingFile;
+    let drawingDetail;
+    if (drawing.available && drawing.compatible) {
+        drawingDetail = `${drawing.name || "drawing"}, ${formatMm(drawing.distance)} of travel`;
+    } else if (drawing.available) {
+        drawingDetail = `${drawing.name || "drawing"} was made for hangers ${drawing.topDistance} mm apart; choose it again for ${state.topDistance} mm`;
+    } else {
+        drawingDetail = "None loaded";
+    }
+    setStep("stepDrawing", ready.drawing ? "done" : (drawing.available ? "warn" : "todo"), drawingDetail);
+    $("#chooseDrawing").prop("disabled", !ready.distance).text(ready.drawing ? "Change" : "Choose");
+    renderOverviewPreview(drawing);
+
+    // Start
+    const missing = [];
+    if (!ready.distance) missing.push("hanger distance");
+    if (!ready.position) missing.push("belt position");
+    if (!ready.pen) missing.push("pen calibration");
+    if (!ready.drawing) missing.push("drawing");
+    $("#beginDrawing").prop("disabled", !ready.all || moving);
+    $("#notReadyHint").text(missing.length ? `Still needed: ${missing.join(", ")}.` : "");
+    $("#moveStatus").text(moving ? "Moving…" : "");
+
+    showSlide("overviewSlide");
+}
+
+// ---------- live drawing status ----------
+
+let drawingPollTimer = null;
+let drawingPollFailures = 0;
+
+function formatDuration(ms) {
+    const s = Math.round(ms / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${sec}s`;
+    return `${sec}s`;
+}
+
+function showDrawing(state) {
+    renderDrawing(state);
+    if (!$("#drawingSlide").is(":visible")) {
+        // Re-use the overview thumbnail if we have it, otherwise fetch it once.
+        const src = $("#overviewPreview").attr("src");
+        if (src) {
+            $("#drawingPreview").attr("src", src).show();
+        } else if (state.drawingFile.hasPreview) {
+            $.get("/savedPreview").done(function (dataUrl) {
+                if (dataUrl && dataUrl.startsWith("data:")) {
+                    $("#drawingPreview").attr("src", dataUrl).show();
+                }
+            });
+        }
+        showSlide("drawingSlide");
+    }
+    scheduleDrawingPoll();
+}
+
+function scheduleDrawingPoll() {
+    clearTimeout(drawingPollTimer);
+    drawingPollTimer = setTimeout(function () {
+        fetchState()
+            .done(function (state) {
+                drawingPollFailures = 0;
+                $("#drawingConnection").text("");
+                if (state.drawingActive) {
+                    renderDrawing(state);
+                    scheduleDrawingPoll();
+                } else {
+                    renderOverview(state); // finished or stopped
+                }
+            })
+            .fail(function () {
+                drawingPollFailures++;
+                if (drawingPollFailures >= 2) {
+                    $("#drawingConnection").text("Lost contact with Mural, retrying… (it may have rebooted)");
+                }
+                scheduleDrawingPoll();
+            });
+    }, 2000);
+}
+
+function renderDrawing(state) {
+    const d = state.drawing;
+    const labels = {
+        drawing: ["Drawing", "bg-primary"],
+        pausing: ["Pausing…", "bg-warning text-dark"],
+        paused: ["Paused", "bg-warning text-dark"],
+        resuming: ["Resuming…", "bg-info text-dark"],
+        stopping: ["Stopping…", "bg-danger"],
+    };
+    const [label, cls] = labels[d.state] || [d.state, "bg-secondary"];
+    $("#drawingStateBadge").attr("class", `badge fs-6 ${cls}`).text(label + (d.state === "paused" ? (d.penDown ? "" : ", pen up") : ""));
+
+    $("#drawingProgressBar").css("width", `${d.progress}%`).text(`${d.progress}%`);
+
+    let stats = `${formatMm(d.distanceDone)} of ${formatMm(d.totalDistance)} · ${formatDuration(d.elapsedMs)} drawing`;
+    if (d.distanceDone > 0 && d.totalDistance > d.distanceDone && d.elapsedMs > 30000) {
+        const remainingMs = d.elapsedMs * (d.totalDistance - d.distanceDone) / d.distanceDone;
+        stats += ` · about ${formatDuration(remainingMs)} left`;
+    }
+    $("#drawingStats").text(stats);
+
+    const busy = d.state === "pausing" || d.state === "resuming" || d.state === "stopping";
+    $("#pauseDrawing").toggle(d.state !== "paused").prop("disabled", busy);
+    $("#resumeDrawing").toggle(d.state === "paused").prop("disabled", busy);
+    $("#stopDrawing").prop("disabled", d.state === "stopping");
+
+}
+
+function drawingAction(url, actionName) {
+    $("#pauseDrawing,#resumeDrawing,#stopDrawing").prop("disabled", true);
+    $.post(url, {})
+        .done(function (state) {
+            currentState = state;
+            renderDrawing(state);
+            scheduleDrawingPoll();
+        })
+        .fail(function (xhr) {
+            alert(`${actionName} failed: ${xhr.responseText || "no response"}`);
+            goOverview();
+        });
+}
+
+function renderOverviewPreview(drawing) {
+    const img = $("#overviewPreview");
+    if (!drawing.available || !drawing.hasPreview) {
+        img.hide().removeAttr("src");
+        previewKey = null;
+        return;
+    }
+    const key = `${drawing.name}:${drawing.sizeBytes}`;
+    if (key === previewKey) {
+        img.show();
+        return;
+    }
+    previewKey = key;
+    $.get("/savedPreview").done(function (dataUrl) {
+        if (previewKey === key && dataUrl && dataUrl.startsWith("data:")) {
+            img.attr("src", dataUrl).show();
+        }
+    });
+}
+
+// ---------- pen calibration helpers ----------
+
+function clampAngle(value) {
+    return Math.max(penCal.min, Math.min(penCal.max, value));
+}
+
+function renderPenCalibration() {
+    $("#penDownValue").text(penCal.down);
+    $("#penUpValue").text(penCal.up);
+    $("#servoRange").attr({min: penCal.min, max: penCal.max}).val(penCal.down);
+}
+
+function stopJogging() {
+    $("#leftMotorToggle,#rightMotorToggle").prop("checked", false);
+    client.leftRetractUp();
+    client.rightRetractUp();
+}
+
+// ---------- page wiring ----------
+
+function init() {
+    $(".backToOverview").click(goOverview);
+
+    // Hanger distance
+    $("#editDistance").click(function () {
+        const state = currentState;
+        $("#distanceInput").val(state.topDistance > 0 ? state.topDistance : "");
+        const warnings = [];
+        if (state.position.known) warnings.push("Changing it means re-homing the belts.");
+        if (state.drawingFile.available) warnings.push("The current drawing would need to be chosen again.");
+        $("#distanceWarning").text(warnings.join(" "));
+        showSlide("distanceSlide");
+    });
+
+    $("#setDistance").click(function () {
+        const value = parseInt($("#distanceInput").val());
+        if (isNaN(value) || value <= 0) {
+            alert("Enter the distance in millimetres");
+            return;
+        }
+        postForState("/setTopDistance", {distance: value}, "Setting the hanger distance");
+    });
+
+    // Belt position
+    $("#resumeSession").click(function () {
+        postForState("/resumeSession", {}, "Resume");
+    });
+
+    $("#testMove").click(function () {
+        $("#testMove,#rehome,#beginDrawing").prop("disabled", true);
+        $("#moveStatus").text("Moving to home… check the pen ends up where you expect.");
+        $.post("/goHome", {})
+            .done(function () {
+                waitForMoveToFinish(renderOverview);
+            })
+            .fail(function (xhr) {
+                alert("Test move failed: " + (xhr.responseText || "no response"));
+                goOverview();
+            });
+    });
+
+    $("#rehome").click(function () {
+        $("#leftMotorToggle,#rightMotorToggle").prop("checked", false);
+        $("#extendToHome").prop("disabled", false);
+        $("#extendingStatus").hide();
+        $("#beltsBack,#leftMotorToggle,#rightMotorToggle").prop("disabled", false);
+        showSlide("beltsSlide");
+    });
+
+    $("#leftMotorToggle").change(function () {
+        if (this.checked) client.leftRetractDown(); else client.leftRetractUp();
+    });
+
+    $("#rightMotorToggle").change(function () {
+        if (this.checked) client.rightRetractDown(); else client.rightRetractUp();
+    });
+
+    $("#beltsBack").click(stopJogging);
+
+    $("#extendToHome").click(async function () {
+        $("#leftMotorToggle,#rightMotorToggle").prop("checked", false);
         await client.leftRetractUp();
         await client.rightRetractUp();
-        doneWithPhase();
+        $("#extendToHome,#beltsBack,#leftMotorToggle,#rightMotorToggle").prop("disabled", true);
+        $("#extendingStatus").show();
+        // Give the jog stop a moment to complete before the positioned move.
+        setTimeout(function () {
+            $.post("/extendToHome", {})
+                .done(function () {
+                    waitForMoveToFinish(renderOverview);
+                })
+                .fail(function (xhr) {
+                    alert("Extend to home failed: " + (xhr.responseText || "no response"));
+                    $("#extendToHome,#beltsBack,#leftMotorToggle,#rightMotorToggle").prop("disabled", false);
+                    $("#extendingStatus").hide();
+                });
+        }, 500);
     });
 
-    $("#setDistance").click(function() {
-        const inputValue = parseInt($("#distanceInput").val());
-        if (isNaN(inputValue)) {
-            throw new Error("input value is not a number");
-        }
-
-        doneWithPhase({
-            url: "/setTopDistance",
-            data: {distance: inputValue},
-            commandName: "Set Top Distance",
-        });
-    });
-
-    $("#leftMotorToggle").change(function() {
-        if (this.checked) {
-            client.leftRetractDown(); 
-        } else {
-            client.leftRetractUp();
-        }
-    });
-
-    $("#rightMotorToggle").change(function() {
-        if (this.checked) {
-            client.rightRetractDown(); 
-        } else {
-            client.rightRetractUp();
-        }
-    });
-
-    $("#extendToHome").click(function() {
-        $(this).prop( "disabled", true);
-        $("#extendingSpinner").css('visibility', 'visible');
-        $.post("/extendToHome", {})
-        .always(async function(res) {
-            const extendToHomeTime = parseInt(res);
-            await checkIfExtendedToHome(extendToHomeTime);
-        });
-    });
-    
     // Pen calibration. Values are raw servo angles; lower = towards the wall.
     // The firmware ramps every move and clamps to the soft limits.
+    $("#editPen").click(function () {
+        const pen = currentState.pen;
+        penCal = {
+            up: pen.up,
+            down: pen.calibrated ? pen.down : Math.max(pen.min, pen.up - 30),
+            min: pen.min,
+            max: pen.max,
+        };
+        renderPenCalibration();
+        showSlide("penCalibrationSlide");
+    });
+
     const sendServo = $.throttle(250, function (angle) {
         $.post("/setServo", {angle});
     });
@@ -112,13 +407,13 @@ function init() {
         sendServo(penCal.down);
     });
 
-    $(".penDownStep").click(function() {
+    $(".penDownStep").click(function () {
         penCal.down = clampAngle(penCal.down + parseInt($(this).data("step")));
         renderPenCalibration();
         sendServo(penCal.down);
     });
 
-    $(".penUpStep").click(function() {
+    $(".penUpStep").click(function () {
         penCal.up = clampAngle(penCal.up + parseInt($(this).data("step")));
         renderPenCalibration();
         sendServo(penCal.up);
@@ -132,51 +427,18 @@ function init() {
             !confirm(`The down angle (${penCal.down}°) is not lower than the up angle (${penCal.up}°). Lower angles move the pen towards the wall. Save anyway?`)) {
             return;
         }
-        doneWithPhase({
-            url: "/setPenDistance",
-            data: {angle: penCal.down, up: penCal.up},
-            commandName: "Set Pen Distance",
-        });
+        postForState("/setPenDistance", {angle: penCal.down, up: penCal.up}, "Saving pen calibration");
     });
 
-    $("#resumeSession").click(function() {
-        doneWithPhase({
-            url: "/resumeSession",
-            commandName: "Resume session",
-        });
+    $("#penBack").click(function () {
+        // Put the pen back to the saved up position before leaving.
+        $.post("/servo", {action: "up"});
+        goOverview();
     });
 
-    $("#useSavedDrawing").click(function() {
-        doneWithPhase({
-            url: "/useSavedDrawing",
-            commandName: "Use saved drawing",
-        });
-    });
-
-    $(".gotoPhase").click(function() {
-        doneWithPhase({
-            url: "/gotoPhase",
-            data: {phase: $(this).data("phase")},
-            commandName: "Go back",
-        });
-    });
-
-    $("#goHome").click(function() {
-        const button = $(this);
-        button.prop("disabled", true);
-        $("#goHomeStatus").text("Moving...");
-        $.post("/goHome", {})
-            .done(function(seconds) {
-                $("#goHomeStatus").text(`Moving to home, about ${seconds}s. Check the pen ends up where you expect.`);
-                setTimeout(() => {
-                    button.prop("disabled", false);
-                    $("#goHomeStatus").text("Done. If the position looks wrong, use Re-home belts.");
-                }, (parseInt(seconds) + 1) * 1000);
-            })
-            .fail(function(xhr) {
-                button.prop("disabled", false);
-                $("#goHomeStatus").text("Failed: " + xhr.responseText);
-            });
+    // Drawing selection
+    $("#chooseDrawing").click(function () {
+        showSlide("svgUploadSlide");
     });
 
     async function getUploadedSvgString() {
@@ -188,7 +450,7 @@ function init() {
         }
     }
 
-    $("#uploadSvg").change(async function() {
+    $("#uploadSvg").change(async function () {
         const svgString = await getUploadedSvgString();
         if (svgString) {
             svgControl.setSvgString(svgString, currentState);
@@ -203,7 +465,6 @@ function init() {
         }
     });
 
-    
     let currentPreviewId = 0;
     let rendererFn = null;
 
@@ -286,7 +547,7 @@ function init() {
 
     function renderSvgInWorker(worker, svg, svgWidth, svgHeight) {
         const svgJson = svgControl.getSvgJson(svg);
-       
+
         const renderRequest = {
             type: "renderSvg",
             svgJson,
@@ -313,7 +574,7 @@ function init() {
 
                 const totalDistanceM = +(e.data.payload.distance / 1000).toFixed(1);
                 const drawDistanceM = +(e.data.payload.drawDistance / 1000).toFixed(1);
-                
+
                 deactivateProgressBar();
                 $("#previewSvg").attr("src", resultDataUrl);
                 $("#distances").text(`Total: ${totalDistanceM}m / Draw: ${drawDistanceM}m`);
@@ -341,54 +602,47 @@ function init() {
         bar.text("Success");
     }
 
-
-    $("#infillDensity,#turdSize,#flattenPathsCheckbox").on('input change', async function() {
+    $("#infillDensity,#turdSize,#flattenPathsCheckbox").on('input change', async function () {
         activateProgressBar();
         $("#acceptSvg").attr("disabled", "disabled");
         await rendererFn();
     });
 
-    $("#preview").click(async function() {
-        $("#svgUploadSlide").hide();
-        $("#chooseRendererSlide").show();
+    $("#preview").click(async function () {
+        showSlide("chooseRendererSlide");
     });
 
-    $("#pathTracing").click(async function() {
+    $("#pathTracing").click(async function () {
         $("label[for='turdSize'],#turdSize").hide();
         $("label[for='flattenPathsCheckbox'],#flattenPathsCheckbox").show();
 
-        $("#chooseRendererSlide").hide();
-        $("#drawingPreviewSlide").show();
+        showSlide("drawingPreviewSlide");
         rendererFn = render_PathTracing;
         await rendererFn();
     });
 
-    $("#vectorRasterVector").click(async function() {
+    $("#vectorRasterVector").click(async function () {
         $("#flattenPathsCheckbox").prop("checked", false);
         $("label[for='turdSize'],#turdSize").show();
         $("label[for='flattenPathsCheckbox'],#flattenPathsCheckbox").hide();
 
-        $("#chooseRendererSlide").hide();
-        $("#drawingPreviewSlide").show();
+        showSlide("drawingPreviewSlide");
         rendererFn = render_VectorRasterVector;
         await rendererFn();
     });
 
-    $(".backToSvgSelect").click(function() {
+    $(".backToSvgSelect").click(function () {
         uploadConvertedCommands = null;
 
-        $(".loading").show();
         activateProgressBar();
         $("#previewSvg").removeAttr("src");
         $(".svg-preview").hide();
         $("#acceptSvg").attr("disabled", "disabled");
 
-        $("#svgUploadSlide").show();
-        $("#drawingPreviewSlide").hide();
-        $("#chooseRendererSlide").hide();
+        showSlide("svgUploadSlide");
     });
-    
-    $("#acceptSvg").click(function() {
+
+    $("#acceptSvg").click(function () {
         if (!uploadConvertedCommands) {
             throw new Error('Commands are empty');
         }
@@ -398,8 +652,8 @@ function init() {
             type: "text/plain"
         });
 
-        $(".muralSlide").hide();
-        $("#uploadProgress").show();
+        $("#uploadProgressBar > .progress-bar, #verificationProgress > .progress-bar").css("width", "0%");
+        showSlide("uploadProgress");
 
         const formData = new FormData();
         formData.append("commands", commandsBlob);
@@ -417,7 +671,7 @@ function init() {
             processData: false,
             contentType: false,
             type: 'POST',
-        }).always(function() {
+        }).always(function () {
             uploadCommandsFile(formData, drawingName);
         });
     });
@@ -429,99 +683,109 @@ function init() {
             processData: false,
             contentType: false,
             type: 'POST',
-            success: function(data) {
-                verifyUpload(data);
+            success: function () {
+                verifyUpload();
             },
-            error: function(err) {
-                alert('Upload to Mural failed! ' + err);
-                window.location.reload();
+            error: function (xhr) {
+                alert('Upload to Mural failed: ' + (xhr.responseText || "no response"));
+                goOverview();
             },
             xhr: function () {
-                var xhr = new window.XMLHttpRequest();
-
+                const xhr = new window.XMLHttpRequest();
                 xhr.upload.addEventListener("progress", function (evt) {
                     if (evt.lengthComputable) {
-                        var percentComplete = evt.loaded / evt.total;
-                        percentComplete = parseInt(percentComplete * 100);
-                        $("#uploadProgress").attr("aria-valuemax", evt.total.toString());
-                        $("#uploadProgress").attr("aria-valuenow", evt.loaded.toString());
-                        $("#uploadProgress > .progress-bar").attr("style", `width: ${percentComplete}%`);
+                        const percentComplete = parseInt(evt.loaded / evt.total * 100);
+                        $("#uploadProgressBar > .progress-bar").css("width", `${percentComplete}%`);
                     }
                 }, false);
-
                 return xhr;
             },
         });
     }
 
-    $("#beginDrawing").click(function() {
+    // Start drawing
+    $("#beginDrawing").click(function () {
+        const webOff = currentState && !currentState.webWhileDrawing;
+        const prompt = webOff
+            ? "Start drawing? The web UI is set to turn off while drawing, so this page won't be reachable until it finishes."
+            : "Start drawing?";
+        if (!confirm(prompt)) {
+            return;
+        }
+        $("#beginDrawing").prop("disabled", true);
         $.post("/run", {})
-            .done(function() {
-                $(".muralSlide").hide();
-                $("#drawingBegan").show();
+            .done(function (state) {
+                if (state && state.webWhileDrawing) {
+                    currentState = state;
+                    showDrawing(state);
+                } else {
+                    showSlide("drawingBegan");
+                }
             })
-            .fail(function(xhr) {
+            .fail(function (xhr) {
                 alert("Couldn't start drawing: " + (xhr.responseText || "no response"));
+                goOverview();
             });
     });
 
-    $("#reset").click(function() {
-        doneWithPhase();
-        location.reload();
-    });
-
-    $("#leftMotorTool").on('input', function() {
-        const leftMotorDir = parseInt($("#leftMotorTool").val());
-        if (leftMotorDir <= -1) {
-            client.leftRetractDown(); 
-        } else if (leftMotorDir >= 1) {
-            client.leftExtendDown();
-        } else {
-            client.leftRetractUp();
+    $("#pauseDrawing").click(() => drawingAction("/pauseDrawing", "Pause"));
+    $("#resumeDrawing").click(() => drawingAction("/resumeDrawing", "Resume"));
+    $("#stopDrawing").click(function () {
+        if (confirm("Stop the drawing? It can't be continued afterwards; you'd have to start it again from the beginning.")) {
+            drawingAction("/stopDrawing", "Stop");
         }
     });
 
-    $("#rightMotorTool").on('input', function() {
-        const rightMotorDir = parseInt($("#rightMotorTool").val());
-        if (rightMotorDir <= -1) {
-            client.rightRetractDown(); 
-        } else if (rightMotorDir >= 1) {
-            client.rightExtendDown();
-        } else {
-            client.rightRetractUp();
-        }
+    // Tools modal
+    $("#leftMotorTool").on('input', function () {
+        const dir = parseInt($("#leftMotorTool").val());
+        if (dir <= -1) client.leftRetractDown();
+        else if (dir >= 1) client.leftExtendDown();
+        else client.leftRetractUp();
     });
 
-    $("#parkServoTool").click(function() {
+    $("#rightMotorTool").on('input', function () {
+        const dir = parseInt($("#rightMotorTool").val());
+        if (dir <= -1) client.rightRetractDown();
+        else if (dir >= 1) client.rightExtendDown();
+        else client.rightRetractUp();
+    });
+
+    $("#parkServoTool").click(function () {
         // Previously drove to 0 deg, the far end of travel, which can stall the servo
         // against its slot. "Up" is the calibrated rest position.
         $.post("/servo", {action: "up"});
     });
 
-    $("#estepsTool").click(function() {
-        $.post("/estepsCalibration", {});
+    $("#estepsTool").click(function () {
+        $.post("/estepsCalibration", {}).fail(function (xhr) {
+            alert("E-steps calibration failed: " + (xhr.responseText || "no response"));
+        });
     });
 
-    const toolsModal = $("#toolsModal")[0];
-
-    toolsModal.addEventListener('hidden.bs.modal', function (event) {
+    $("#toolsModal")[0].addEventListener('hidden.bs.modal', function () {
+        $("#leftMotorTool,#rightMotorTool").val(0);
         client.rightRetractUp();
         client.leftRetractUp();
+        // Jogging invalidates the belt position - refresh the overview.
+        if ($("#overviewSlide").is(":visible")) {
+            setTimeout(goOverview, 500);
+        }
     });
 
     // Collapsible log panel - polls /log only while open.
     let logTimer = null;
     function refreshMainLog() {
-        $.get("/log").done(function(text) {
+        $.get("/log").done(function (text) {
             const log = $("#mainLog")[0];
             const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
             $("#mainLog").text(text || "(empty)");
             if (atBottom) log.scrollTop = log.scrollHeight;
-        }).fail(function() {
-            $("#mainLog").text("Can't reach Mural (rebooting, or drawing - the web UI is off while drawing).");
+        }).fail(function () {
+            $("#mainLog").text("Can't reach Mural (rebooting, out of range, or drawing with the web UI turned off).");
         });
     }
-    $("#toggleLog").click(function() {
+    $("#toggleLog").click(function () {
         const log = $("#mainLog");
         if (log.is(":visible")) {
             log.hide();
@@ -539,187 +803,56 @@ function init() {
 
     svgControl.initSvgControl();
 
-    $("#loadingSlide").show();
-
-    // adaptToState({
-    //     phase: "BeginDrawing",
-    //     topDistance: 1727,
-    //     safeWidth: 1000,
-    //     homeX: 0,
-    //     homeY: 0,
-    // });
-
-    $.get("/getState", function(data) {
-        adaptToState(data);
-    }).fail(function() {
-        alert("Failed to retrieve state");
-    });
-}
-
-function verifyUpload(state) {
-    $.ajax({
-            url: "/downloadCommands",
-            processData: false,
-            contentType: false,
-            type: 'GET',
-            success: function(data) {
-                const receivedData = data.split('\n');
-                const sentData = uploadConvertedCommands.split('\n');
-                if (receivedData.length !== sentData.length) {
-                    alert("Data verification failed");
-                    window.location.reload();
-                    return;
-                }
-                for (let i = 0; i < receivedData.length; i++) {
-                    if (receivedData[i] !== sentData[i]) {
-                        alert("Data verification failed");
-                        window.location.reload();
-                        return;
-                    }
-                }
-                setTimeout(function() {
-                    adaptToState(state);
-                }, 1000);
-            },
-            error: function(err) {
-                alert('Failed to download commands from Mural! ' + err);
-                window.location.reload();
-            },
-            xhr: function () {
-                var xhr = new window.XMLHttpRequest();
-                xhr.addEventListener("progress", function (evt) {
-                    if (evt.lengthComputable) {
-                        var percentComplete = evt.loaded / evt.total;
-                        percentComplete = parseInt(percentComplete * 100);
-                        $("#verificationProgress").attr("aria-valuemax", evt.total.toString());
-                        $("#verificationProgress").attr("aria-valuenow", evt.loaded.toString());
-                        $("#verificationProgress > .progress-bar").attr("style", `width: ${percentComplete}%`);
-                    }
-                }, false);
-
-                return xhr;
-            },
-        });
-    
-}
-
-function adaptToState(state) {
-    $(".muralSlide").hide();
-    currentState = state;
-    switch(state.phase) {
-        case "RetractBelts":
-            $("#retractBeltsSlide").show();
-            break;
-        case "SetTopDistance":
-            showSetTopDistance(state);
-            break;
-        case "ExtendToHome":
-            $("#extendToHomeSlide").show();
-            if (state.moving || state.startedHoming) {
-                $("#extendToHome").prop( "disabled", true);
-                $("#extendingSpinner").css('visibility', 'visible');
-                checkIfExtendedToHome();
+    // Initial load: if a move is still running (e.g. page refreshed mid-homing),
+    // wait for it before showing the overview.
+    showSlide("loadingSlide");
+    fetchState()
+        .done(function (state) {
+            if (state.homing || state.moving) {
+                waitForMoveToFinish(renderOverview);
+            } else {
+                renderOverview(state);
             }
-            break;
-        case "PenCalibration":
-            // No automatic servo move here any more - the pen is already up.
-            penCal = {
-                up: state.pen.up,
-                down: state.pen.calibrated ? state.pen.down : Math.max(state.pen.min, state.pen.up - 30),
-                min: state.pen.min,
-                max: state.pen.max,
-            };
-            renderPenCalibration();
-            $("#penCalibrationSlide").show();
-            break;
-        case "SvgSelect":
-            showSvgSelect(state);
-            break;
-        case "BeginDrawing":
-            showBeginDrawing(state);
-            break;
-        default:
-            alert("Unrecognized phase");
-    }
+        })
+        .fail(function () {
+            alert("Failed to retrieve state");
+        });
 }
 
-function clampAngle(value) {
-    return Math.max(penCal.min, Math.min(penCal.max, value));
-}
-
-function renderPenCalibration() {
-    $("#penDownValue").text(penCal.down);
-    $("#penUpValue").text(penCal.up);
-    $("#servoRange").attr({min: penCal.min, max: penCal.max}).val(penCal.down);
-}
-
-function formatMm(mm) {
-    return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.round(mm)} mm`;
-}
-
-function showSetTopDistance(state) {
-    if (state.savedTopDistance > 0 && !$("#distanceInput").val()) {
-        $("#distanceInput").val(state.savedTopDistance);
-    }
-
-    const pos = state.savedPosition;
-    if (pos && pos.valid) {
-        const penText = state.pen.calibrated
-            ? `pen up ${state.pen.up}° / down ${state.pen.down}°`
-            : "pen not calibrated yet";
-        $("#resumeDetails").text(
-            `Hangers ${pos.topDistance} mm apart, last position x=${pos.x.toFixed(0)} y=${pos.y.toFixed(0)} mm, ${penText}.`);
-        $("#resumeCard").show();
-        $("#noResumeNote").hide();
-    } else {
-        $("#resumeCard").hide();
-        if (pos && pos.reason) {
-            $("#noResumeNote").text(`Resume isn't available: ${pos.reason}, so the belts need re-homing.`).show();
-        } else {
-            $("#noResumeNote").hide();
-        }
-    }
-    $("#distanceBetweenAnchorsSlide").show();
-}
-
-function showSvgSelect(state) {
-    const saved = state.savedDrawing;
-    if (saved && saved.available) {
-        let details = `${saved.name || "drawing"} · ${formatMm(saved.distance)} of travel`;
-        if (!saved.compatible) {
-            details += ` · made for hangers ${saved.topDistance} mm apart (now ${state.topDistance} mm), so it can't be re-used`;
-        }
-        $("#savedDrawingDetails").text(details);
-        $("#useSavedDrawing").prop("disabled", !saved.compatible);
-
-        const img = $("#savedDrawingPreview");
-        img.hide().removeAttr("src");
-        if (saved.hasPreview) {
-            $.get("/savedPreview").done(function(dataUrl) {
-                if (dataUrl && dataUrl.startsWith("data:")) {
-                    img.attr("src", dataUrl).show();
+function verifyUpload() {
+    $.ajax({
+        url: "/downloadCommands",
+        processData: false,
+        contentType: false,
+        type: 'GET',
+        success: function (data) {
+            const receivedData = data.split('\n');
+            const sentData = uploadConvertedCommands.split('\n');
+            let ok = receivedData.length === sentData.length;
+            for (let i = 0; ok && i < receivedData.length; i++) {
+                ok = receivedData[i] === sentData[i];
+            }
+            if (!ok) {
+                alert("Data verification failed - please upload the drawing again");
+            }
+            previewKey = null; // force the overview thumbnail to reload
+            setTimeout(goOverview, 500);
+        },
+        error: function () {
+            alert('Failed to read the drawing back from Mural for verification');
+            goOverview();
+        },
+        xhr: function () {
+            const xhr = new window.XMLHttpRequest();
+            xhr.addEventListener("progress", function (evt) {
+                if (evt.lengthComputable) {
+                    const percentComplete = parseInt(evt.loaded / evt.total * 100);
+                    $("#verificationProgress > .progress-bar").css("width", `${percentComplete}%`);
                 }
-            });
-        }
-        $("#savedDrawingCard").show();
-    } else {
-        $("#savedDrawingCard").hide();
-    }
-    $("#svgUploadSlide").show();
-}
-
-function showBeginDrawing(state) {
-    const summary = $("#readySummary").empty();
-    const item = (label, value) => $("<li class='list-group-item d-flex justify-content-between'></li>")
-        .append($("<span></span>").text(label))
-        .append($("<span class='text-muted'></span>").text(value));
-    summary.append(item("Hangers", `${state.topDistance} mm`));
-    summary.append(item("Pen", `up ${state.pen.up}° / down ${state.pen.down}°`));
-    if (state.savedDrawing && state.savedDrawing.available) {
-        summary.append(item("Drawing", `${state.savedDrawing.name} (${formatMm(state.savedDrawing.distance)})`));
-    }
-    $("#goHomeStatus").text("");
-    $("#beginDrawingSlide").show();
+            }, false);
+            return xhr;
+        },
+    });
 }
 
 function getInfillDensity() {
