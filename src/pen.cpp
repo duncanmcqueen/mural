@@ -76,6 +76,62 @@ bool Pen::isDown() {
     return isCalibrated() && targetAngle == clamp(settings.downAngle);
 }
 
+int Pen::getDownAngle() {
+    int requested = requestedDownAngle.load();
+    return requested >= 0 ? requested : settings.downAngle;
+}
+
+int Pen::adjustDownAngle(int steps) {
+    if (!isCalibrated()) {
+        return settings.downAngle;
+    }
+    // Web requests are handled one at a time, so build on any pending request.
+    int base = getDownAngle();
+    int up = settings.upAngle;
+    // Towards the wall = from the up angle towards the down angle.
+    int towardsWall = settings.downAngle <= up ? -1 : 1;
+    int next = clamp(base + towardsWall * steps);
+    if (towardsWall < 0 && next >= up) next = base < up ? up - 1 : base;
+    if (towardsWall > 0 && next <= up) next = base > up ? up + 1 : base;
+    if (next != base) {
+        requestedDownAngle.store(next);
+    }
+    return next;
+}
+
+// Main loop only.
+void Pen::applyRequestedDownAngle() {
+    int requested = requestedDownAngle.load();
+    if (requested < 0) {
+        return;
+    }
+    int oldDown = settings.downAngle;
+    bool wasDown = isDown();
+    if (downAngleBeforeAdjust < 0) {
+        downAngleBeforeAdjust = oldDown;
+    }
+    settings.downAngle = requested;
+    // If another request came in meanwhile, it stays pending and is applied next time.
+    requestedDownAngle.compare_exchange_strong(requested, -1);
+    Log.printf("Pen: down angle adjusted %d -> %d deg (calibrated %d)%s\n", oldDown, settings.downAngle,
+               downAngleBeforeAdjust, wasDown ? "" : ", used at next pen-down");
+    if (wasDown) {
+        moveTo(settings.downAngle);
+    }
+}
+
+void Pen::saveAdjustedDownAngle() {
+    applyRequestedDownAngle();
+    if (downAngleBeforeAdjust < 0) {
+        return;
+    }
+    if (settings.downAngle != downAngleBeforeAdjust) {
+        persist.savePenSettings(settings);
+        Log.printf("Pen: adjusted down angle saved (%d -> %d deg)\n", downAngleBeforeAdjust, settings.downAngle);
+    }
+    downAngleBeforeAdjust = -1;
+}
+
 void Pen::release() {
     cycleRemaining = 0;
     releaseRequested = true;
@@ -96,6 +152,9 @@ void Pen::stopTest() {
 
 void Pen::applySettings(const PenSettings &newSettings) {
     PenSettings s = newSettings;
+    // An explicit calibration replaces any on-the-fly adjustment.
+    requestedDownAngle.store(-1);
+    downAngleBeforeAdjust = -1;
     if (s.minAngle < 0) s.minAngle = 0;
     if (s.maxAngle > 180) s.maxAngle = 180;
     if (s.minAngle > s.maxAngle) s.minAngle = s.maxAngle;
@@ -132,6 +191,8 @@ void Pen::update() {
         }
         return;
     }
+
+    applyRequestedDownAngle();
 
     if (pendingMove) {
         if (!positionKnown && now < holdOffUntilMs) {

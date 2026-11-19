@@ -56,6 +56,7 @@ class Controller {
     void pauseDrawing(AsyncWebServerRequest *request);
     void resumeDrawing(AsyncWebServerRequest *request);
     void stopDrawing(AsyncWebServerRequest *request);
+    void adjustPenDown(AsyncWebServerRequest *request);
 
     static DrawingFileInfo readDrawingFileInfo();
 };

@@ -47,6 +47,7 @@ void Controller::registerRoutes() {
     server->on("/pauseDrawing", HTTP_POST, [this](AsyncWebServerRequest *r) { pauseDrawing(r); });
     server->on("/resumeDrawing", HTTP_POST, [this](AsyncWebServerRequest *r) { resumeDrawing(r); });
     server->on("/stopDrawing", HTTP_POST, [this](AsyncWebServerRequest *r) { stopDrawing(r); });
+    server->on("/adjustPenDown", HTTP_POST, [this](AsyncWebServerRequest *r) { adjustPenDown(r); });
     server->on("/uploadCommands", HTTP_POST,
         [this](AsyncWebServerRequest *r) { uploadComplete(r); },
         [this](AsyncWebServerRequest *r, String filename, size_t index, uint8_t *data, size_t len, bool final) {
@@ -67,6 +68,7 @@ void Controller::loop() {
     if (wasDrawing && !drawing) {
         // Drawing finished or was stopped: back to setup, flash writes allowed again.
         pen->setPersistLastAngle(true);
+        pen->saveAdjustedDownAngle(); // keep any pen-down adjustment made while drawing
         positionRestored = false;
         testMoveDone = false;
     }
@@ -177,7 +179,8 @@ void Controller::respondWithState(AsyncWebServerRequest *request) {
     const PenSettings &ps = pen->getSettings();
     JsonObject &penJson = root.createNestedObject("pen");
     penJson["up"] = ps.upAngle;
-    penJson["down"] = ps.downAngle;
+    penJson["down"] = pen->getDownAngle();
+    penJson["downCalibrated"] = pen->getDownAngleBeforeAdjust() >= 0 ? pen->getDownAngleBeforeAdjust() : ps.downAngle;
     penJson["min"] = ps.minAngle;
     penJson["max"] = ps.maxAngle;
     penJson["calibrated"] = pen->isCalibrated();
@@ -473,6 +476,28 @@ void Controller::resumeDrawing(AsyncWebServerRequest *request) {
     }
     Log.println("Resume requested");
     runner->requestResume();
+    respondWithState(request);
+}
+
+// Params: steps = degrees towards the wall (more pressure), negative = away from it.
+// Allowed only while drawing (including paused); saved to flash when the drawing ends.
+void Controller::adjustPenDown(AsyncWebServerRequest *request) {
+    if (!runner->isRunning()) {
+        request->send(400, "text/plain", "Not drawing - use the pen calibration step instead");
+        return;
+    }
+    int steps = intParam(request, "steps", 0);
+    if (steps < -10 || steps > 10 || steps == 0) {
+        request->send(400, "text/plain", "steps must be between -10 and 10");
+        return;
+    }
+    int before = pen->getDownAngle();
+    int after = pen->adjustDownAngle(steps);
+    if (after == before) {
+        request->send(409, "text/plain", "Pen down angle is already at its limit");
+        return;
+    }
+    Log.printf("Pen down adjustment requested: %d -> %d deg\n", before, after);
     respondWithState(request);
 }
 

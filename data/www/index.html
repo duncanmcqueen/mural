@@ -139,6 +139,20 @@
           <button class="btn btn-lg btn-success" id="resumeDrawing" style="display:none;">Resume</button>
           <button class="btn btn-outline-danger" id="stopDrawing">Stop drawing</button>
         </div>
+        <div class="card mb-3">
+          <div class="card-body py-2">
+            <div class="d-flex justify-content-between align-items-baseline mb-2">
+              <b>Pen pressure</b>
+              <span class="small text-muted" id="penAdjustValue"></span>
+            </div>
+            <div class="btn-group w-100 mb-2" role="group">
+              <button type="button" class="btn btn-outline-primary penAdjust" data-steps="-1">&lsaquo; Lighter</button>
+              <button type="button" class="btn btn-outline-primary penAdjust" data-steps="1">Firmer &rsaquo;</button>
+            </div>
+            <div class="small text-muted">Each tap moves the pen-down position 1&deg; away from or towards the wall. If the pen is on the wall it moves straight away, otherwise at the next pen-down. The new angle is saved as the pen-down angle when the drawing ends.</div>
+            <div class="small text-danger" id="penAdjustError"></div>
+          </div>
+        </div>
         <p class="small text-muted mb-0">Pause lets the current short move finish and lifts the pen. Resume puts it back down and carries on from the same spot. Stop ends the drawing where Mural is; its position stays known, so you can move it home from the overview.</p>
         <div class="small text-danger mt-2" id="drawingConnection"></div>
       </div>

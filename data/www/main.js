@@ -248,6 +248,19 @@ function renderDrawing(state) {
     $("#resumeDrawing").toggle(d.state === "paused").prop("disabled", busy);
     $("#stopDrawing").prop("disabled", d.state === "stopping");
 
+    renderPenAdjust(state.pen);
+    $(".penAdjust").prop("disabled", d.state === "stopping");
+}
+
+function renderPenAdjust(pen) {
+    let text = `down ${pen.down}°`;
+    if (pen.downCalibrated !== undefined && pen.downCalibrated !== pen.down) {
+        const diff = Math.abs(pen.down - pen.downCalibrated);
+        // Towards the wall = from the up angle towards the calibrated down angle.
+        const towardsWall = (pen.down - pen.downCalibrated) * (pen.downCalibrated - pen.up) > 0;
+        text += ` (${diff}° ${towardsWall ? "firmer" : "lighter"} than calibrated ${pen.downCalibrated}°)`;
+    }
+    $("#penAdjustValue").text(text);
 }
 
 function drawingAction(url, actionName) {
@@ -725,6 +738,20 @@ function init() {
             .fail(function (xhr) {
                 alert("Couldn't start drawing: " + (xhr.responseText || "no response"));
                 goOverview();
+            });
+    });
+
+    // Pen pressure while drawing. Not disabled between taps so several quick taps
+    // add up; the firmware applies each one on its main loop.
+    $(".penAdjust").click(function () {
+        $("#penAdjustError").text("");
+        $.post("/adjustPenDown", {steps: parseInt($(this).data("steps"))})
+            .done(function (state) {
+                currentState = state;
+                renderPenAdjust(state.pen);
+            })
+            .fail(function (xhr) {
+                $("#penAdjustError").text(xhr.responseText || "No response from Mural");
             });
     });
 

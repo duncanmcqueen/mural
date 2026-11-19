@@ -1,6 +1,7 @@
 #ifndef Pen_h
 #define Pen_h
 #include <ESP32Servo.h>
+#include <atomic>
 #include "persist.h"
 
 constexpr int SERVO_PIN = 2;
@@ -47,6 +48,12 @@ class Pen {
     bool persistLastAngle = true;   // false while drawing - no flash writes mid-drawing
     int lastPersistedAngle = -1;
 
+    // On-the-fly pen-down adjustment while drawing. The web task stores the new
+    // angle here; update() applies it on the main loop (-1 = nothing pending).
+    std::atomic<int> requestedDownAngle{-1};
+    int downAngleBeforeAdjust = -1;     // calibrated angle before any adjustment, -1 = not adjusted
+    void applyRequestedDownAngle();
+
     static const unsigned long SETTLE_MS = 200;
     void rememberAngle();
 
@@ -68,6 +75,15 @@ class Pen {
     bool isCalibrated() { return settings.downAngle >= 0; }
 
     const PenSettings &getSettings() { return settings; }
+    // Nudge the pen-down angle by `steps` degrees towards the wall (negative = away).
+    // Safe to call from the web task. If the pen is down it moves right away (ramped),
+    // otherwise the new angle is used at the next pen-down. Stays within the soft
+    // limits and never reaches the up angle. Returns the new down angle.
+    int adjustDownAngle(int steps);
+    int getDownAngle();                 // including a not-yet-applied adjustment
+    int getDownAngleBeforeAdjust() { return downAngleBeforeAdjust; }
+    // Saves an adjusted down angle to flash (call when not drawing).
+    void saveAdjustedDownAngle();
     void applySettings(const PenSettings &newSettings); // clamps, saves to flash
 
     // diagnostics
