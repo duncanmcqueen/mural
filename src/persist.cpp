@@ -32,7 +32,11 @@ void Persist::begin() {
     bootCount = prefs.getUInt("bootCount", 0) + 1;
     prefs.putUInt("bootCount", bootCount);
 
-    prefs.getBytes("rstHist", resetHistory, sizeof(resetHistory));
+    // Reading a missing key makes the Preferences library log an error, and on a fresh
+    // device every one of these is missing - so ask first.
+    if (prefs.isKey("rstHist")) {
+        prefs.getBytes("rstHist", resetHistory, sizeof(resetHistory));
+    }
     memmove(resetHistory + 1, resetHistory, RESET_HISTORY - 1);
     resetHistory[0] = (uint8_t)esp_reset_reason();
     prefs.putBytes("rstHist", resetHistory, sizeof(resetHistory));
@@ -63,6 +67,26 @@ void Persist::saveTopDistance(int distance) {
     prefs.putInt("topDist", distance);
 }
 
+String Persist::loadWifiCountry() {
+    if (!prefs.isKey("wifiCC")) {
+        return String(""); // never asked
+    }
+    String cc = prefs.getString("wifiCC", "");
+    cc.trim();
+    cc.toUpperCase();
+    // Empty means "never asked" - the portal shows an empty field then. Anything that
+    // isn't two letters is treated the same way; the driver would reject it anyway.
+    if (cc.length() != 2 || cc[0] < 'A' || cc[0] > 'Z' || cc[1] < 'A' || cc[1] > 'Z') {
+        return String("");
+    }
+    return cc;
+}
+
+void Persist::saveWifiCountry(const String &cc) {
+    prefs.putString("wifiCC", cc);
+    Log.printf("WiFi country code set to %s\n", cc.c_str());
+}
+
 PenSettings Persist::loadPenSettings() {
     PenSettings s;
     s.upAngle = prefs.getInt("penUp", s.upAngle);
@@ -85,7 +109,7 @@ void Persist::savePenSettings(const PenSettings &s) {
 
 SavedPosition Persist::loadPosition() {
     SavedPosition p;
-    if (prefs.getBytesLength("pos") == sizeof(SavedPosition)) {
+    if (prefs.isKey("pos") && prefs.getBytesLength("pos") == sizeof(SavedPosition)) {
         prefs.getBytes("pos", &p, sizeof(SavedPosition));
     }
     return p;
@@ -125,6 +149,9 @@ void Persist::invalidatePosition(const char *reason) {
 }
 
 String Persist::getPositionInvalidReason() {
+    if (!prefs.isKey("posWhy")) {
+        return String("");
+    }
     return prefs.getString("posWhy", "");
 }
 
@@ -177,7 +204,7 @@ void Persist::loopPosition(Movement *movement, bool drawing) {
 
 SavedDrawing Persist::loadDrawing() {
     SavedDrawing d;
-    if (prefs.getBytesLength("drawing") == sizeof(SavedDrawing)) {
+    if (prefs.isKey("drawing") && prefs.getBytesLength("drawing") == sizeof(SavedDrawing)) {
         prefs.getBytes("drawing", &d, sizeof(SavedDrawing));
     }
     d.name[sizeof(d.name) - 1] = '\0';

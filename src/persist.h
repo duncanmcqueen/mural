@@ -58,6 +58,11 @@ class Persist {
     int loadTopDistance();
     void saveTopDistance(int distance);
 
+    // WiFi country code (2 letters), set on the captive portal. Decides which channels
+    // and power levels the radio may use, so it has to match where Mural is installed.
+    String loadWifiCountry();
+    void saveWifiCountry(const String &cc);
+
     PenSettings loadPenSettings();
     void savePenSettings(const PenSettings &settings);
 

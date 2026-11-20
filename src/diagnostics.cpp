@@ -5,6 +5,7 @@
 #include "ArduinoJson.h"
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 namespace {
     Movement *gMovement;
@@ -49,6 +50,12 @@ namespace {
         system["minFreeHeap"] = ESP.getMinFreeHeap();
         system["cpuMHz"] = ESP.getCpuFreqMHz();
         system["wifiRssi"] = WiFi.RSSI();
+        wifi_country_t country;
+        if (esp_wifi_get_country(&country) == ESP_OK) {
+            // cc[] is not guaranteed to be NUL-terminated - don't hand it to String().
+            char cc[3] = {country.cc[0], country.cc[1], '\0'};
+            system["wifiCountry"] = cc;
+        }
         system["ip"] = WiFi.localIP().toString();
         system["oledPresent"] = gDisplay->isPresent();
         system["phase"] = gController->statusName();

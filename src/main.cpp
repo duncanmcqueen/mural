@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFiManager.h>
+#include <esp_wifi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <FS.h>
@@ -56,9 +57,38 @@ void setup()
         resetAfterConnect = true;
     };
     
+    // 802.11b only: the ESP32 fails the 4-way handshake at this spot in the house
+    // on 802.11n rates (-66 dBm). See nikivanov/mural issue #109.
+    WiFi.mode(WIFI_STA);
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
+
     WiFiManager wifiManager;
-    
+
+    // The country code decides which channels and power levels the radio may use, so it
+    // has to match where Mural is installed. It is asked for on the captive portal (empty
+    // on the first boot, prefilled afterwards), kept in NVS and applied on every boot.
+    // "US" is used until someone answers.
+    String wifiCountry = persist.loadWifiCountry();
+    // Length 3 preserves overlong input for rejection below; the pattern enforces two letters.
+    WiFiManagerParameter countryParam("country", "WiFi country code (two letters, e.g. US)",
+                                      wifiCountry.c_str(), 3,
+                                      "size=2 pattern='[A-Za-z]{2}' title='Two letters, e.g. US'");
+    wifiManager.addParameter(&countryParam);
+    wifiManager.setSaveParamsCallback([&]() {
+        String cc = countryParam.getValue();
+        cc.trim();
+        cc.toUpperCase();
+        if (cc.length() == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z') {
+            persist.saveWifiCountry(cc);
+        } else {
+            Log.println("Country code not saved - it must be two letters, e.g. US");
+        }
+    });
+
+    wifiManager.setCountry(wifiCountry.length() > 0 ? wifiCountry : String("US"));
     wifiManager.setConnectTimeout(20);
+    wifiManager.setConnectRetries(2);
+    wifiManager.setCleanConnect(true);
     wifiManager.setTitle("Connect to WiFi");
     wifiManager.setMenu(menu);
     wifiManager.setWebServerCallback(serverCallback);
@@ -71,6 +101,11 @@ void setup()
     
     Log.println("Connected to wifi");
 
+    wifi_country_t appliedCountry;
+    if (esp_wifi_get_country(&appliedCountry) == ESP_OK) {
+        Log.printf("WiFi country: %c%c, RSSI: %d dBm\n", appliedCountry.cc[0], appliedCountry.cc[1], WiFi.RSSI());
+    }
+
     MDNS.begin("mural");
 
     Log.println("Started mDNS for mural");
@@ -81,11 +116,14 @@ void setup()
     runner = new Runner(movement, pen, display);
     Log.println("Initialized runner");
 
-    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("no-cache");
-
     controller = new Controller(movement, pen, runner, &server);
     controller->registerRoutes();
     registerDiagnosticsRoutes(&server, movement, pen, runner, controller, display);
+
+    // Registered last: handlers are tried in registration order, so the API routes above
+    // answer first. With this first, every GET (/log, /diagnostics, /getState) made the
+    // static handler look for a file that cannot exist and log an error before giving up.
+    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("no-cache");
 
     server.onNotFound(notFound);
 
