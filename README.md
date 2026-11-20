@@ -1,6 +1,6 @@
 # Mural v1.1-plus
 
-This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) with firmware and web UI improvements for **v1.1 hardware** (bare ESP32, two TMC2209 drivers, MG90s servo). It's based on upstream's `v1.1` tag and won't work on v2 (FluidNC) boards.
+This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that builds directly on the **v1.1-plus** firmware and web UI work by Jonathon T in [zeiphon/mural-1-plus](https://github.com/zeiphon/mural-1-plus). Everything described under "Improvements over v1.1" below is his work; this fork adds the fixes listed under [Credits](#credits). It targets **v1.1 hardware** (bare ESP32, two TMC2209 drivers, MG90s servo), is based on upstream's `v1.1` tag, and won't work on v2 (FluidNC) boards.
 
 ## Improvements over v1.1
 
@@ -81,3 +81,15 @@ Here's how the image is prepared and drawn:
 ## Mural's Kinematic Model
 
 Please find the kinematic model [here](KinematicModel.md).
+
+## Credits
+
+This firmware is derivative work. Please keep these credits if you fork it further.
+
+- **[nikivanov/mural](https://github.com/nikivanov/mural)** — the original Mural hardware, firmware and [kinematic model](KinematicModel.md), by Nik Ivanov and contributors. This fork starts at upstream's `v1.1` tag (`c817cd0`).
+- **[zeiphon/mural-1-plus](https://github.com/zeiphon/mural-1-plus)** — Jonathon T (zeiphon). The `Controller` replacing the fixed setup phases, NVS persistence of the setup state, the diagnostics page and RAM ring-buffer log, ramped servo movement with soft limits, pause/resume/stop with live progress, on-the-fly pen pressure, the 115200 baud change, the partition table, and the release workflow. This branch is built on his `v1.1-plus` branch; his commits are preserved unchanged in the history.
+- **Changes added in this fork** (`duncanmcqueen/mural`):
+  - `dbbc44a` — force 802.11b for association when the ESP32 cannot complete the 4-way handshake at moderate signal levels ([nikivanov/mural#109](https://github.com/nikivanov/mural/issues/109)); WiFi country code as a captive-portal setting stored in NVS instead of a hardcoded `US`; quieter first boot (NVS keys checked before reading, static file handler registered after the API routes).
+  - `f134903` — invalidate the saved belt position before homing/calibration moves and on any hanger-distance change; stop and restart the web server from `loop()` instead of from inside a request handler; parse the total-distance header without eating its last character; keep task exceptions out of `loop()` by ending the run as failed; validate coordinates before committing them.
+
+Licensed under [CC BY-NC 4.0](LICENSE.md), as upstream.
