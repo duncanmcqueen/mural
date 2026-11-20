@@ -216,6 +216,11 @@ export async function getCurrentSvgImageData() {
 
     const bitmap = await createImageBitmap(img, {resizeHeight: scaledHeight, resizeWidth: scaledWidth});
 
+    // A new canvas is transparent, and the outline tracer treats anything that is not white
+    // as ink - so whatever the SVG leaves uncovered (for example the strip added by shifting
+    // the image down) used to come out as drawn lines near the top.
+    canvasContext.fillStyle = "white";
+    canvasContext.fillRect(0, 0, scaledWidth, scaledHeight);
     canvasContext.drawImage(bitmap, 0, 0, scaledWidth, scaledHeight);
     
     const imageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
@@ -245,12 +250,37 @@ export function getSvgJson(svgString) {
     return json;
 }
 
+// Chrome's hardware-accelerated canvas silently stops stroking a single path beyond about
+// 1.5-2M segments - and a high-resolution outline trace is one continuous path - which leaves
+// the preview blank. Stay well under that. Ported from nikivanov/mural fd628ce.
+const MAX_PREVIEW_PATH_SEGMENTS = 500000;
+
+/** Splits overly long paths into consecutive chunks that share endpoints */
+function splitLongPaths() {
+    paper.project.getItems({
+        class: paper.Path,
+        match: item => item.segments.length > MAX_PREVIEW_PATH_SEGMENTS,
+    }).forEach(path => {
+        const segments = path.closed ? [...path.segments, path.firstSegment] : path.segments;
+        for (let i = 0; i < segments.length - 1; i += MAX_PREVIEW_PATH_SEGMENTS) {
+            const chunk = new paper.Path({
+                segments: segments.slice(i, i + MAX_PREVIEW_PATH_SEGMENTS + 1),
+                insert: false,
+            });
+            chunk.style = path.style;
+            chunk.insertBelow(path);
+        }
+        path.remove();
+    });
+}
+
 export function convertJsonToDataURL(json, width, height) {
     $("#previewCanvas").remove();
     $(document.body).append(`<canvas id="previewCanvas" width="${width}" height="${height}" style="display: none;"></canvas>`);
     
     paper.setup($("#previewCanvas")[0]);
     paper.project.importJSON(json);
+    splitLongPaths();
     paper.view.draw();
 
     const dataURL = $("#previewCanvas")[0].toDataURL();
