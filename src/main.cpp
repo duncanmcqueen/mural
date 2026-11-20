@@ -95,10 +95,17 @@ void setup()
         Log.printf("Hotspot \"%s\" ready at http://%s, country %s\n", HOTSPOT_SSID, ipAddress.c_str(), country);
         Log.println("Power cycle to go back to normal WiFi mode");
     } else {
-        // 802.11b only: the ESP32 fails the 4-way handshake at this spot in the house
-        // on 802.11n rates (-66 dBm). See nikivanov/mural issue #109.
+        // No 802.11n (HT) on this installation. On HT rates the ESP32 could not complete the
+        // WPA2 handshake once the signal dropped to about -66 dBm (nikivanov/mural#109), and
+        // behind the mesh AP it stayed associated while all inbound traffic stopped - no TCP on
+        // any port, no ICMP, while its own ARP replies still went out. OFDM without HT (11bg)
+        // associates and stays reliable here; 11b-only also avoids HT, but its 1-11 Mbit rates
+        // are slower and use far more airtime. There is nothing to gain from HT: this serves a
+        // few tens of KB of web UI.
         WiFi.mode(WIFI_STA);
-        esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
+        if (esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G) != ESP_OK) {
+            Log.println("Could not disable 802.11n (HT) - WiFi may be less reliable");
+        }
 
         WiFiManager wifiManager;
 
