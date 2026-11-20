@@ -1,6 +1,6 @@
 # Mural v1.1-plus
 
-This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that builds directly on the **v1.1-plus** firmware and web UI work by Jonathon T in [zeiphon/mural-1-plus](https://github.com/zeiphon/mural-1-plus). Everything described under "Improvements over v1.1" below is his work; this fork adds the fixes listed under [Credits](#credits). It targets **v1.1 hardware** (bare ESP32, two TMC2209 drivers, MG90s servo), is based on upstream's `v1.1` tag, and won't work on v2 (FluidNC) boards.
+This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that builds directly on the **v1.1-plus** firmware and web UI work by Jonathon T in [zeiphon/mural-1-plus](https://github.com/zeiphon/mural-1-plus). Everything described under "Improvements over v1.1" below is his work, except the items marked *(this fork)*; the full list is under [Credits](#credits). It targets **v1.1 hardware** (bare ESP32, two TMC2209 drivers, MG90s servo), is based on upstream's `v1.1` tag, and won't work on v2 (FluidNC) boards.
 
 ## Improvements over v1.1
 
@@ -27,13 +27,15 @@ This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that bui
 - [HARDWARE_IMPROVEMENTS.md](HARDWARE_IMPROVEMENTS.md) suggests fixes for servo brownouts, servo stalls and hot stepper motors.
 
 ### Other
+- **WiFi association fixed** *(this fork)*. At moderate signal levels, around -66 dBm, the ESP32 gets stuck failing the WPA2 4-way handshake and never joins, even with the right password; the log shows handshake timeouts and authentication failures. Limiting the station to 802.11b rates joins reliably every time. See [nikivanov/mural#109](https://github.com/nikivanov/mural/issues/109).
+- **WiFi country code is a setting** *(this fork)*. The captive portal asks for it (empty on a first boot, prefilled afterwards) and it is kept in NVS instead of being hardcoded to `US`. It decides which channels and power levels the radio may use, so it should match where Mural is installed. The Diagnostics page reports the code the driver actually applied.
 - Serial speed is 115200 baud (upstream uses 9600, which slowed the main loop down).
 - The OLED code is skipped, since v1.1 has no OLED. To use one, build with `-DMURAL_HAS_OLED=1`.
 - Builds on Windows. `build.py` no longer uses Unix shell commands. If `npm install` fails in `tsc/`, run `npm install --ignore-scripts` there instead.
 
 ## Installing
 
-The easiest way is the **[web installer](https://zeiphon.github.io/mural-1-plus/)**. Plug the ESP32 in over USB and flash it from desktop Chrome or Edge, with nothing to install. Prebuilt `.bin` files for esptool are on the [releases page](https://github.com/zeiphon/mural-1-plus/releases).
+The easiest way is the **[web installer](https://duncanmcqueen.github.io/mural/)**. Plug the ESP32 in over USB and flash it from desktop Chrome or Edge, with nothing to install. Prebuilt `.bin` files for esptool are on the [releases page](https://github.com/duncanmcqueen/mural/releases).
 
 Use **Fresh install** the first time, including when coming from upstream Mural. This fork uses a different partition table (upstream's put settings where PlatformIO writes `boot_app0.bin`, so every upload could corrupt them). After that, **Update** keeps your settings and calibration.
 
