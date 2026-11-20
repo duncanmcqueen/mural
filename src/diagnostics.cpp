@@ -56,7 +56,9 @@ namespace {
             char cc[3] = {country.cc[0], country.cc[1], '\0'};
             system["wifiCountry"] = cc;
         }
-        system["ip"] = WiFi.localIP().toString();
+        bool hotspotMode = WiFi.getMode() == WIFI_AP;
+        system["ip"] = hotspotMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+        system["wifiMode"] = hotspotMode ? "hotspot" : "station";
         system["oledPresent"] = gDisplay->isPresent();
         system["phase"] = gController->statusName();
         system["drawing"] = gRunner->isRunning();

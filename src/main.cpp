@@ -15,6 +15,9 @@
 #include "persist.h"
 #include "logger.h"
 #include "diagnostics.h"
+#include "portalhtml.h"
+#include <esp_attr.h>
+#include <esp_system.h>
 
 AsyncWebServer server(80);
 
@@ -30,7 +33,19 @@ void notFound(AsyncWebServerRequest *request)
     request->send(404, "text/plain", "Not found");
 }
 
-std::vector<const char *> menu = {"wifi", "sep"};
+std::vector<const char *> menu = {"wifi", "custom", "sep"};
+
+const char *HOTSPOT_SSID = "Mural";
+
+// Set by the "use without WiFi" button, so the next boot hosts its own network instead of
+// joining one. RTC memory holds garbage after a power-on, hence the magic value rather than
+// a plain bool; the flag is cleared on the first boot that reads it.
+const uint32_t HOTSPOT_BOOT_MAGIC = 0x4D555241; // "MURA"
+RTC_NOINIT_ATTR uint32_t hotspotBootFlag;
+
+// Set from a web request, acted on in loop() so the response can go out first.
+volatile bool restartRequested = false;
+
 void setup()
 {
     delay(10);
@@ -52,58 +67,96 @@ void setup()
     movement = new Movement(display);
     Log.println("Initialized steppers");
 
+    // Consume the flag, so a restart for any other reason goes back to the normal WiFi flow.
+    // Both entry points restart with ESP.restart(); the reset-reason check also prevents
+    // uninitialised RTC memory from requesting hotspot mode after a cold boot.
+    bool hotspotMode = esp_reset_reason() == ESP_RST_SW && hotspotBootFlag == HOTSPOT_BOOT_MAGIC;
+    hotspotBootFlag = 0;
+    String ipAddress;
+
     bool resetAfterConnect = false;
-    std::function<void()> serverCallback = [&] () {
-        resetAfterConnect = true;
-    };
-    
-    // 802.11b only: the ESP32 fails the 4-way handshake at this spot in the house
-    // on 802.11n rates (-66 dBm). See nikivanov/mural issue #109.
-    WiFi.mode(WIFI_STA);
-    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
-
-    WiFiManager wifiManager;
-
-    // The country code decides which channels and power levels the radio may use, so it
-    // has to match where Mural is installed. It is asked for on the captive portal (empty
-    // on the first boot, prefilled afterwards), kept in NVS and applied on every boot.
-    // "US" is used until someone answers.
-    String wifiCountry = persist.loadWifiCountry();
-    // Length 3 preserves overlong input for rejection below; the pattern enforces two letters.
-    WiFiManagerParameter countryParam("country", "WiFi country code (two letters, e.g. US)",
-                                      wifiCountry.c_str(), 3,
-                                      "size=2 pattern='[A-Za-z]{2}' title='Two letters, e.g. US'");
-    wifiManager.addParameter(&countryParam);
-    wifiManager.setSaveParamsCallback([&]() {
-        String cc = countryParam.getValue();
-        cc.trim();
-        cc.toUpperCase();
-        if (cc.length() == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z') {
-            persist.saveWifiCountry(cc);
-        } else {
-            Log.println("Country code not saved - it must be two letters, e.g. US");
+    if (hotspotMode) {
+        // No WiFi at all: host our own network and serve the UI on it.
+        Log.println("Starting hotspot mode (no WiFi)");
+        // The station path gets its country from WiFiManager; an AP needs it applied here.
+        String wifiCountry = persist.loadWifiCountry();
+        WiFi.mode(WIFI_AP);
+        esp_wifi_set_country_code(wifiCountry.length() > 0 ? wifiCountry.c_str() : "US", true);
+        if (!WiFi.softAP(HOTSPOT_SSID)) {
+            Log.println("Hotspot failed to start");
         }
-    });
+        ipAddress = WiFi.softAPIP().toString();
+        char country[3] = {'?', '?', '\0'};
+        wifi_country_t appliedCountry;
+        if (esp_wifi_get_country(&appliedCountry) == ESP_OK) {
+            country[0] = appliedCountry.cc[0];
+            country[1] = appliedCountry.cc[1];
+        }
+        Log.printf("Hotspot \"%s\" ready at http://%s, country %s\n", HOTSPOT_SSID, ipAddress.c_str(), country);
+        Log.println("Power cycle to go back to normal WiFi mode");
+    } else {
+        // 802.11b only: the ESP32 fails the 4-way handshake at this spot in the house
+        // on 802.11n rates (-66 dBm). See nikivanov/mural issue #109.
+        WiFi.mode(WIFI_STA);
+        esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
 
-    wifiManager.setCountry(wifiCountry.length() > 0 ? wifiCountry : String("US"));
-    wifiManager.setConnectTimeout(20);
-    wifiManager.setConnectRetries(2);
-    wifiManager.setCleanConnect(true);
-    wifiManager.setTitle("Connect to WiFi");
-    wifiManager.setMenu(menu);
-    wifiManager.setWebServerCallback(serverCallback);
-    wifiManager.autoConnect("Mural");
+        WiFiManager wifiManager;
 
-    if (resetAfterConnect) {
-        Log.println("Connected to WiFi through captive portal, restarting...");
-        ESP.restart();
-    }
-    
-    Log.println("Connected to wifi");
+        std::function<void()> serverCallback = [&] () {
+            resetAfterConnect = true;
+            // Lets the user skip WiFi setup and run Mural off its own hotspot after a restart
+            wifiManager.server->on("/offline", HTTP_POST, [&] () {
+                hotspotBootFlag = HOTSPOT_BOOT_MAGIC;
+                wifiManager.server->send(200, "text/html", OFFLINE_PAGE_HTML);
+                wifiManager.stopConfigPortal();
+            });
+        };
 
-    wifi_country_t appliedCountry;
-    if (esp_wifi_get_country(&appliedCountry) == ESP_OK) {
-        Log.printf("WiFi country: %c%c, RSSI: %d dBm\n", appliedCountry.cc[0], appliedCountry.cc[1], WiFi.RSSI());
+        // The country code decides which channels and power levels the radio may use, so it
+        // has to match where Mural is installed. It is asked for on the captive portal (empty
+        // on the first boot, prefilled afterwards), kept in NVS and applied on every boot.
+        // "US" is used until someone answers.
+        String wifiCountry = persist.loadWifiCountry();
+        // Length 3 preserves overlong input for rejection below; the pattern enforces two letters.
+        WiFiManagerParameter countryParam("country", "WiFi country code (two letters, e.g. US)",
+                                          wifiCountry.c_str(), 3,
+                                          "size=2 pattern='[A-Za-z]{2}' title='Two letters, e.g. US'");
+        wifiManager.addParameter(&countryParam);
+        wifiManager.setSaveParamsCallback([&]() {
+            String cc = countryParam.getValue();
+            cc.trim();
+            cc.toUpperCase();
+            if (cc.length() == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z') {
+                persist.saveWifiCountry(cc);
+            } else {
+                Log.println("Country code not saved - it must be two letters, e.g. US");
+            }
+        });
+
+        wifiManager.setCountry(wifiCountry.length() > 0 ? wifiCountry : String("US"));
+        wifiManager.setConnectTimeout(20);
+        wifiManager.setConnectRetries(2);
+        wifiManager.setCleanConnect(true);
+        wifiManager.setTitle("Connect to WiFi");
+        wifiManager.setMenu(menu);
+        wifiManager.setCustomMenuHTML(OFFLINE_MENU_HTML);
+        wifiManager.setWebServerCallback(serverCallback);
+        wifiManager.autoConnect(HOTSPOT_SSID);
+
+        if (resetAfterConnect) {
+            Log.println(hotspotBootFlag == HOTSPOT_BOOT_MAGIC
+                ? "Hotspot mode chosen in the captive portal, restarting..."
+                : "Connected to WiFi through captive portal, restarting...");
+            ESP.restart();
+        }
+
+        Log.println("Connected to wifi");
+
+        wifi_country_t appliedCountry;
+        if (esp_wifi_get_country(&appliedCountry) == ESP_OK) {
+            Log.printf("WiFi country: %c%c, RSSI: %d dBm\n", appliedCountry.cc[0], appliedCountry.cc[1], WiFi.RSSI());
+        }
+        ipAddress = WiFi.localIP().toString();
     }
 
     MDNS.begin("mural");
@@ -120,6 +173,18 @@ void setup()
     controller->registerRoutes();
     registerDiagnosticsRoutes(&server, movement, pen, runner, controller, display);
 
+    // Same switch as the captive portal button, reachable from the normal UI: useful when
+    // Mural is taken somewhere without a usable WiFi network.
+    server.on("/hotspot", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (runner->isRunning()) {
+            request->send(409, "text/plain", "Not while drawing");
+            return;
+        }
+        hotspotBootFlag = HOTSPOT_BOOT_MAGIC;
+        request->send(200, "text/html", OFFLINE_PAGE_HTML);
+        restartRequested = true;
+    });
+
     // Registered last: handlers are tried in registration order, so the API routes above
     // answer first. With this first, every GET (/log, /diagnostics, /getState) made the
     // static handler look for a file that cannot exist and log an error before giving up.
@@ -132,7 +197,7 @@ void setup()
     server.begin();
     Log.println("Server started");
 
-    display->displayHomeScreen("http://" + WiFi.localIP().toString(), "or", "http://mural.local");
+    display->displayHomeScreen("http://" + ipAddress, "or", "http://mural.local");
     
 }
 
@@ -145,4 +210,11 @@ void loop()
     pen->update();
     runner->run();
     controller->loop();
+
+    // Restart out here rather than in the handler, so its reply has gone out first.
+    if (restartRequested) {
+        restartRequested = false;
+        delay(250);
+        ESP.restart();
+    }
 }
