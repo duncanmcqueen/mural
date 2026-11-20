@@ -71,8 +71,26 @@ void Controller::loop() {
         pen->saveAdjustedDownAngle(); // keep any pen-down adjustment made while drawing
         positionRestored = false;
         testMoveDone = false;
+        if (serverStoppedForDrawing) {
+            serverStoppedForDrawing = false;
+            server->begin();
+            Log.println("Web UI enabled again (drawing ended)");
+        }
     }
     wasDrawing = drawing;
+
+    // A very short or failed drawing can end before the deferred stop fires.
+    if (!drawing) {
+        stopServerAtMs = 0;
+    }
+
+    // Deferred by a moment so the /run response can go out before the server stops.
+    if (stopServerAtMs != 0 && (long)(millis() - stopServerAtMs) >= 0) {
+        stopServerAtMs = 0;
+        Log.println("Web UI disabled while drawing (diagnostics setting)");
+        server->end();
+        serverStoppedForDrawing = true;
+    }
 }
 
 const char *Controller::statusName() {
@@ -222,10 +240,14 @@ void Controller::setTopDistance(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Distance must be a positive number of millimetres");
         return;
     }
-    if (distance != movement->getTopDistance() && movement->isHomed()) {
+    if (distance != movement->getTopDistance()) {
         // The pen's x/y are relative to the hangers; with a different distance the
         // current coordinates no longer describe where the bot physically is.
-        movement->forgetPosition();
+        if (movement->isHomed()) {
+            movement->forgetPosition();
+        }
+        // Also drop any saved position. Without this, resuming after a reboot would
+        // restore the old distance and quietly undo the change.
         persist.invalidatePosition("the hanger distance was changed");
     }
     Log.printf("Setting hanger distance to %d mm\n", distance);
@@ -270,6 +292,10 @@ void Controller::extendToHome(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Set the hanger distance first");
         return;
     }
+    // The belts are about to move, so the saved position stops describing where the
+    // bot is - even if the power fails part-way through the homing move.
+    persist.invalidatePosition("homing was started");
+
     try {
         auto moveTime = movement->extendToHome() + 1; // extra second for good measure
         positionedMove = true;
@@ -306,6 +332,8 @@ void Controller::goHome(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Pen must be up before moving");
         return;
     }
+    persist.invalidatePosition("a move home was started");
+
     try {
         float seconds = movement->moveToHome();
         positionedMove = true;
@@ -348,6 +376,7 @@ void Controller::setPenCalibration(AsyncWebServerRequest *request) {
 void Controller::estepsCalibration(AsyncWebServerRequest *request) {
     if (rejectIfBusy(request)) return;
     Log.println("Extending 1000mm");
+    persist.invalidatePosition("a 1000mm calibration move was started");
     movement->extend1000mm();
     positionRestored = false;
     testMoveDone = false;
@@ -454,8 +483,9 @@ void Controller::run(AsyncWebServerRequest *request) {
     wasDrawing = true;
     respondWithState(request);
     if (!persist.getWebWhileDrawing()) {
-        Log.println("Web UI disabled while drawing (diagnostics setting)");
-        server->end();
+        // Do not stop the server from inside a request handler - that would cut off
+        // this very response. loop() stops it once the reply has gone out.
+        stopServerAtMs = millis() + 250;
     }
 }
 

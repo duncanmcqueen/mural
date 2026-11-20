@@ -375,11 +375,17 @@ Movement::Lengths Movement::getBeltLengths(const double x, const double y) {
 
 float Movement::beginLinearTravel(double x, double y, int speed)
 {
-    X = x;
-    Y = y;
     if (topDistance == -1 || !homed) {
         Log.println("Not ready");
         throw std::invalid_argument("not ready");
+    }
+
+    // NaN compares false against every bound, so test it explicitly - a NaN that got
+    // through would be turned into a step count below.
+    if (!isfinite(x) || !isfinite(y))
+    {
+        Log.println("Invalid coordinates (not a number)");
+        throw std::invalid_argument("Invalid coordinates");
     }
 
     if (x < 0 || (x - 1) > width)
@@ -393,6 +399,11 @@ float Movement::beginLinearTravel(double x, double y, int speed)
         Log.println("Invalid y");
         throw std::invalid_argument("Invalid y");
     }
+
+    // Only record the target once the move has been accepted, so a rejected point
+    // can't leave a position that the next autosave would treat as real.
+    X = x;
+    Y = y;
 
     auto lengths = getBeltLengths(x, y);
     auto leftLegSteps = lengths.left;

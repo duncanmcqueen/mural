@@ -29,6 +29,8 @@ class Controller {
     bool testMoveDone = false;             // a test move ran since the position was restored
     String uploadError;                    // set by the upload handler, reported on completion
     bool wasDrawing = false;               // to notice when a drawing ends
+    unsigned long stopServerAtMs = 0;      // 0 = no pending stop; else millis() when to stop
+    bool serverStoppedForDrawing = false;  // stopped for the drawing, start it again when it ends
 
     bool rejectIfDrawing(AsyncWebServerRequest *request);
     bool rejectIfBusy(AsyncWebServerRequest *request);

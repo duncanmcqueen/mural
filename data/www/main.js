@@ -102,6 +102,8 @@ function renderOverview(state) {
         $("#lastDrawingNote").text(`Last drawing finished (${formatDuration(last.elapsedMs)} of drawing).`).show();
     } else if (last && last.lastOutcome === "stopped") {
         $("#lastDrawingNote").text(`Last drawing was stopped at ${last.progress}%. Mural is where it stopped; use "Test move to home" to park it.`).show();
+    } else if (last && last.lastOutcome === "failed") {
+        $("#lastDrawingNote").text(`Last drawing failed at ${last.progress}%. The pen was lifted; check the log for the error.`).show();
     } else {
         $("#lastDrawingNote").hide();
     }

@@ -25,8 +25,11 @@ void Runner::initTaskProvider() {
     }
 
     auto line = openedFile.readStringUntil('\n');
+    line.trim();
     if (line.charAt(0) == 'd') {
-        totalDistance = line.substring(1, line.length() - 1).toDouble();
+        // The web UI writes LF-only lines, so readStringUntil() has already removed
+        // the terminator - dropping one more character would eat the last digit.
+        totalDistance = line.substring(1).toDouble();
     } else {
         Log.println("Bad file - no distance");
         openedFile.close();
@@ -38,6 +41,12 @@ void Runner::initTaskProvider() {
         Log.println("Bad file - no height");
         openedFile.close();
         throw std::invalid_argument("bad file");
+    }
+
+    if (!(totalDistance > 0)) {
+        Log.println("Bad file - nothing to draw");
+        openedFile.close();
+        throw std::invalid_argument("bad distance");
     }
 
     Log.println("Total distance to travel: " + String(totalDistance));
@@ -61,8 +70,15 @@ void Runner::start() {
     initTaskProvider();
     startMs = millis();
     currentTask = getNextTask();
-    currentTask->startRunning();
     stopped = false;
+    try {
+        currentTask->startRunning();
+    } catch (const std::exception &e) {
+        // Let the caller report it, but don't leak the open file and the tasks.
+        Log.printf("Failed to start the first task: %s\n", e.what());
+        finishRun(Outcome::Failed);
+        throw;
+    }
     Log.println("Drawing started");
 }
 
@@ -171,14 +187,18 @@ void Runner::finishRun(Outcome outcome) {
     stopped = true;
 
     unsigned long s = finishedElapsedMs / 1000;
+    if (outcome == Outcome::Failed) {
+        pen->up(); // don't leave the pen resting on the wall
+    }
     if (outcome == Outcome::Finished) {
         // Back home: save the position so the next session can resume without re-homing.
         persist.savePosition(movement);
         Log.printf("Drawing finished in %lum %lus\n", s / 60, s % 60);
         display->displayText("Done");
     } else {
-        Log.printf("Drawing stopped at %d%% after %lum %lus\n", progress < 0 ? 0 : progress, s / 60, s % 60);
-        display->displayText("Stopped");
+        const char *what = outcome == Outcome::Failed ? "Drawing failed" : "Drawing stopped";
+        Log.printf("%s at %d%% after %lum %lus\n", what, progress < 0 ? 0 : progress, s / 60, s % 60);
+        display->displayText(outcome == Outcome::Failed ? "Failed" : "Stopped");
     }
 }
 
@@ -237,7 +257,18 @@ void Runner::run()
         resuming = false;
     }
 
-    if (currentTask->isDone())
+    bool taskDone = false;
+    try {
+        taskDone = currentTask->isDone();
+    } catch (const std::exception &e) {
+        // A damaged command file can ask for coordinates the kinematics reject.
+        // Ending the run keeps the exception out of loop(), where it would abort.
+        Log.printf("Drawing failed: %s\n", e.what());
+        finishRun(Outcome::Failed);
+        return;
+    }
+
+    if (taskDone)
     {
         if (currentTask->name() == InterpolatingMovementTask::NAME) {
             auto distanceCovered = Movement::distanceBetweenPoints(startPosition, targetPosition);
@@ -258,7 +289,12 @@ void Runner::run()
         currentTask = getNextTask();
         if (currentTask != NULL)
         {
-            currentTask->startRunning();
+            try {
+                currentTask->startRunning();
+            } catch (const std::exception &e) {
+                Log.printf("Drawing failed: %s\n", e.what());
+                finishRun(Outcome::Failed);
+            }
         }
         else
         {
