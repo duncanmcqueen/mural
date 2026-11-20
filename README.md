@@ -13,6 +13,7 @@ This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that bui
 ### Drawing
 - **The web UI stays up while drawing**, showing progress, elapsed time and an estimate of the time left. You can turn this off on the Diagnostics page.
 - **Pause, resume and stop.** Pausing lifts the pen after the current short move, and resume puts it back down and carries on from the same spot.
+- **Renderer fixes** *(this fork)*. The rasterising canvas is cleared to white first, so shifting an image down no longer traces a stray line across the top; and very long single paths are split before previewing, because Chrome's accelerated canvas stops stroking them and the preview came out blank.
 - **Adjust pen pressure while drawing.** Lighter and Firmer buttons move the pen-down angle 1° at a time, for example when the pen starts losing contact near the edges. The new angle is saved when the drawing ends.
 
 ### Pen servo
@@ -29,6 +30,8 @@ This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) that bui
 ### Other
 - **WiFi association fixed** *(this fork)*. At moderate signal levels, around -66 dBm, the ESP32 gets stuck failing the WPA2 4-way handshake and never joins, even with the right password; the log shows handshake timeouts and authentication failures. Limiting the station to 802.11b rates joins reliably every time. See [nikivanov/mural#109](https://github.com/nikivanov/mural/issues/109).
 - **WiFi country code is a setting** *(this fork)*. The captive portal asks for it (empty on a first boot, prefilled afterwards) and it is kept in NVS instead of being hardcoded to `US`. It decides which channels and power levels the radio may use, so it should match where Mural is installed. The Diagnostics page reports the code the driver actually applied.
+- **Runs without a WiFi network** *(this fork)*. A "Use without WiFi" button in the captive portal, or `POST /hotspot`, makes Mural host its own network after a restart; the web UI is then at `http://192.168.4.1` with no router involved. A reset returns to normal WiFi mode.
+- **Corrected pulley geometry** *(this fork)*. The distance between the pulley axes was measured at 85.90 mm rather than 85.00, which changes the belt tangent geometry (`d_t` 76.927 instead of 76.027). Re-home once after updating so the saved origin matches the new model.
 - Serial speed is 115200 baud (upstream uses 9600, which slowed the main loop down).
 - The OLED code is skipped, since v1.1 has no OLED. To use one, build with `-DMURAL_HAS_OLED=1`.
 - Builds on Windows. `build.py` no longer uses Unix shell commands. If `npm install` fails in `tsc/`, run `npm install --ignore-scripts` there instead.
@@ -94,6 +97,9 @@ This firmware is derivative work. Please keep these credits if you fork it furth
   - **WiFi association fixed by forcing 802.11b** (`dbbc44a`) — at moderate signal levels (around -66 dBm) the ESP32 fails the WPA2 4-way handshake and never joins, even with the correct password, reporting handshake timeouts and auth failures. Limiting the station to 802.11b rates associates reliably every time. See [nikivanov/mural#109](https://github.com/nikivanov/mural/issues/109).
   - **WiFi country code as a setting** (`dbbc44a`) — asked for on the captive portal (empty on a first boot, prefilled afterwards) and stored in NVS, instead of a hardcoded `US`. It decides which channels and power levels the radio may use, so it has to match where Mural is installed; `/diagnostics` reports the code the driver actually applied.
   - **Quieter first boot** (`dbbc44a`) — NVS keys are checked before being read, and the static file handler is registered after the API routes, so a fresh device no longer logs a wall of "not found" errors.
+  - **Hotspot mode** (`177aab0`) — adapted from upstream `e284fbd` ("standalone ap mode"): an RTC flag, consumed on the next boot, makes Mural host its own network instead of joining one.
+  - **Pulley geometry correction** (`177aab0`) — upstream `7b23140`, measured on this hardware: pulley axis distance 85.00 → 85.90 mm (`d_t` 76.927).
+  - **Renderer fixes** (`8b45339`) — upstream `c61d955` (white canvas before rasterising, no stray line at the top after shifting) and `fd628ce` (split paths over 500k segments so long previews render).
   - **Setup and drawing fixes** (`f134903`) — the saved belt position is now invalidated before homing/calibration moves and on any hanger-distance change (resume used to be able to restore a stale position, or silently restore the previous distance); the web server is stopped and restarted from `loop()` rather than from inside a request handler (it never came back before); the total-distance header no longer loses its last character; exceptions from drawing tasks end the run as failed instead of aborting the board; coordinates are validated before they are committed.
 
 Licensed under [CC BY-NC 4.0](LICENSE.md), as upstream.
