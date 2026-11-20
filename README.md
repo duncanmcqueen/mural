@@ -31,7 +31,13 @@ This is a fork of [nikivanov/mural](https://github.com/nikivanov/mural) with fir
 - The OLED code is skipped, since v1.1 has no OLED. To use one, build with `-DMURAL_HAS_OLED=1`.
 - Builds on Windows. `build.py` no longer uses Unix shell commands. If `npm install` fails in `tsc/`, run `npm install --ignore-scripts` there instead.
 
-## Flashing
+## Installing
+
+The easiest way is the **[web installer](https://zeiphon.github.io/mural-1-plus/)**. Plug the ESP32 in over USB and flash it from desktop Chrome or Edge, with nothing to install. Prebuilt `.bin` files for esptool are on the [releases page](https://github.com/zeiphon/mural-1-plus/releases).
+
+Use **Fresh install** the first time, including when coming from upstream Mural. This fork uses a different partition table (upstream's put settings where PlatformIO writes `boot_app0.bin`, so every upload could corrupt them). After that, **Update** keeps your settings and calibration.
+
+## Building from source
 
 This fork builds with PlatformIO, like upstream. The firmware and the web UI live in separate flash partitions:
 
@@ -39,6 +45,19 @@ This fork builds with PlatformIO, like upstream. The firmware and the web UI liv
 - **Upload Filesystem Image** flashes the web UI (`data/`). Do this only when files in `data/` have changed.
 
 Uploading the filesystem image erases the drawing stored on the device, so you'll need to choose the drawing again afterwards. Settings and calibration aren't affected.
+
+The firmware version comes from `git describe` and is shown on the Diagnostics page.
+
+## Making a release
+
+Push a tag of the form `v1.1-plus.N`:
+
+```
+git tag v1.1-plus.1
+git push origin v1.1-plus.1
+```
+
+The [Release workflow](.github/workflows/release.yml) builds the firmware and web UI, creates a GitHub release with the `.bin` files attached, and publishes the web installer to GitHub Pages. To build the same files locally, run `python scripts/package_release.py` with PlatformIO's Python (`~/.platformio/penv/Scripts/python`). The output goes to `dist/`.
 
 # Upstream documentation
 

@@ -1,6 +1,10 @@
 # ESP-IDF Partition Table
 # Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
+# Same layout as the Arduino default for the first 64K: PlatformIO always
+# writes boot_app0.bin (8K) at 0xe000, so that space is reserved as otadata.
+# Upstream's table put NVS and phy_init there, so every upload clobbered the
+# last NVS page (where settings and calibration live).
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
 factory,  app,  factory, 0x10000, 1200K,
-spiffs, data, spiffs, 0x13C000, 2800K,
+spiffs,   data, spiffs,  0x13C000, 2800K,

@@ -7,7 +7,10 @@
 #include "display.h"
 #include "controller.h"
 
-#define MURAL_FW_VERSION "1.1-ux.3"
+// Set at build time from `git describe` by scripts/fw_version.py.
+#ifndef MURAL_FW_VERSION
+#define MURAL_FW_VERSION "unknown"
+#endif
 
 // Registers troubleshooting endpoints:
 //   GET  /diagnostics        JSON snapshot (system, servo, motors, storage)
