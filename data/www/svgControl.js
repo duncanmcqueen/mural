@@ -216,9 +216,10 @@ export async function getCurrentSvgImageData() {
 
     const bitmap = await createImageBitmap(img, {resizeHeight: scaledHeight, resizeWidth: scaledWidth});
 
-    // A new canvas is transparent, and the outline tracer treats anything that is not white
-    // as ink - so whatever the SVG leaves uncovered (for example the strip added by shifting
-    // the image down) used to come out as drawn lines near the top.
+    // Fill first, so the SVG is composited onto white rather than left transparent: the
+    // tracer keeps every pixel that is neither fully transparent nor pure white
+    // (tsc/src/vectorizer.ts), so the alpha in empty areas decides what gets drawn.
+    // Upstream's fix for a stray line near the top after shifting the image down (c61d955).
     canvasContext.fillStyle = "white";
     canvasContext.fillRect(0, 0, scaledWidth, scaledHeight);
     canvasContext.drawImage(bitmap, 0, 0, scaledWidth, scaledHeight);
