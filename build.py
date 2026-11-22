@@ -35,3 +35,20 @@ if result != 0 or not os.path.isfile(bundle):
 
 shutil.copyfile(bundle, os.path.join(worker_dir, "worker.js"))
 print("Copied worker to data/www/worker/worker.js")
+
+# mklittlefs (tool-mklittlefs 0.2.3) silently skips any file whose name is longer
+# than 32 characters, and then stops adding the rest of that folder - the file ends up
+# missing from the image while the web UI still references it. Fail loudly instead.
+LITTLEFS_NAME_MAX = 32
+data_dir = os.path.join(project_dir, "data")
+too_long = []
+for root, _dirs, files in os.walk(data_dir):
+    for name in files:
+        if len(name) > LITTLEFS_NAME_MAX:
+            too_long.append(os.path.relpath(os.path.join(root, name), project_dir))
+if too_long:
+    print("ERROR: these files have names longer than %d characters and would be "
+          "silently dropped from the LittleFS image:" % LITTLEFS_NAME_MAX)
+    for path in sorted(too_long):
+        print("  " + path)
+    env.Exit(1)
